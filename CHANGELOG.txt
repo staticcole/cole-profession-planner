@@ -1,0 +1,14 @@
+COLE PROFESSION PLANNER CHANGELOG
+=================================
+
+0.9.5-tbc
+---------
+
+- Added profession-specific Cole artwork for the project and minimap icon.
+- Added quantity-aware auction pricing and full candidate-material refreshes.
+- Added shopping-list creation and Auctionator material searches.
+- Added current-character and alt bag/bank inventory support.
+- Added profession-gated intermediate crafts and alternative recipe pricing.
+- Added recipe source selection with map and optional TomTom navigation.
+- Added automatic profession skill and TBC Anniversary phase detection.
+- Added CurseForge-style package metadata, documentation, and validation.
