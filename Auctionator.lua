@@ -13,8 +13,14 @@ function SPP.Auctionator:GetVolumeUnitPrice(itemId)
   local records = ColeProfessionPlannerDB and ColeProfessionPlannerDB.volumePrices
   local record = records and records[itemId]
   if not record or not record.timestamp or currentTime() - record.timestamp > VOLUME_TTL_SECONDS then return nil end
-  if not record.requested or record.requested <= 0 or not record.total or record.total <= 0 then return nil end
+  if not record.requested or record.requested <= 0 or not record.total or record.total <= 0 then return nil, record end
   return record.total / record.requested, record
+end
+
+function SPP.Auctionator:IsItemCurrentlyAvailable(itemId)
+  local unitPrice, record = self:GetVolumeUnitPrice(itemId)
+  if not record or not unitPrice or (record.available or 0) < 1 then return false end
+  return true, unitPrice, record.available
 end
 
 local function cheapestStackCost(tiers, needed)
@@ -62,16 +68,14 @@ function SPP.Auctionator:CaptureVolumePrices(results, plan)
       local available = 0
       for _, tier in ipairs(tiers) do available = available + tier.quantity end
       local total = cheapestStackCost(tiers, requestedQuantity)
-      if total then
-        ColeProfessionPlannerDB.volumePrices[itemId] = {
-          requested = requestedQuantity, available = available, total = total, timestamp = currentTime()
-        }
-        captured = captured + 1
-      else
-        ColeProfessionPlannerDB.volumePrices[itemId] = nil
-      end
+      ColeProfessionPlannerDB.volumePrices[itemId] = {
+        requested = requestedQuantity, available = available, total = total, timestamp = currentTime()
+      }
+      if total then captured = captured + 1 end
     else
-      ColeProfessionPlannerDB.volumePrices[itemId] = nil
+      ColeProfessionPlannerDB.volumePrices[itemId] = {
+        requested = math.ceil(needed), available = 0, timestamp = currentTime()
+      }
     end
   end
   SPP.Price:ClearCache()
@@ -85,7 +89,7 @@ function SPP.Auctionator:ReceiveEvent(eventName, results)
   self.collecting = false
   local count = self:CaptureVolumePrices(results, self.activePlan)
   self.activePlan = nil
-  print(string.format("|cff75c94fCole:|r captured quantity pricing for %d materials. Click Calculate again.", count))
+  print(string.format("|cff75c94fCole:|r captured quantity pricing for %d auction items; recalculating the route.", count))
   if SPP.UI and SPP.UI.OnAuctionPricesUpdated then SPP.UI:OnAuctionPricesUpdated(count) end
 end
 
@@ -103,15 +107,21 @@ function SPP.Auctionator:IsAuctionHouseOpen()
   return (AuctionHouseFrame and AuctionHouseFrame:IsShown()) or (AuctionFrame and AuctionFrame:IsShown()) or false
 end
 
-function SPP.Auctionator:GetShoppingRows(plan)
+function SPP.Auctionator:GetShoppingRows(plan, auctionOnly)
   local rows, unresolved = {}, {}
   for itemId, quantity in pairs(plan and plan.shopping or {}) do
     if quantity > 0.001 then
       local name = SPP.Data:GetItemName(itemId)
-      if name == "Item " .. tostring(itemId) then
+      local vendorPrice = SPP.Data:GetVendorPrice(itemId)
+      if auctionOnly and vendorPrice then
+        -- Profession supplies have a fixed vendor price and never belong in an AH scan.
+      elseif name == "Item " .. tostring(itemId) then
         table.insert(unresolved, itemId)
       else
-        table.insert(rows, { itemId = itemId, name = name, quantity = math.ceil(quantity) })
+        table.insert(rows, {
+          itemId = itemId, name = name, quantity = math.ceil(quantity),
+          vendor = vendorPrice ~= nil, vendorPrice = vendorPrice
+        })
       end
     end
   end
@@ -128,6 +138,8 @@ function SPP.Auctionator:GetRecipeOpportunityPlan(plan)
     profession = plan and plan.profession or "profession",
     fromSkill = plan and plan.fromSkill or 1,
     toSkill = plan and plan.toSkill or 1,
+    maxExpansion = plan and plan.maxExpansion,
+    maxPhase = plan and plan.maxPhase,
     shopping = shopping,
     recipeOpportunityScan = true
   }
@@ -148,6 +160,8 @@ function SPP.Auctionator:GetRefreshPlan(plan)
     profession = plan and plan.profession or "profession",
     fromSkill = plan and plan.fromSkill or 1,
     toSkill = plan and plan.toSkill or 1,
+    maxExpansion = plan and plan.maxExpansion,
+    maxPhase = plan and plan.maxPhase,
     shopping = shopping,
     fullMarketRefresh = true,
     refreshQuantityCap = plan and plan.refreshQuantityCap
@@ -157,10 +171,16 @@ end
 function SPP.Auctionator:RefreshPrices(plan)
   local refreshPlan = self:GetRefreshPlan(plan)
   if not next(refreshPlan.shopping) then return false, "No candidate materials to refresh" end
-  local count = #self:GetShoppingRows(refreshPlan)
+  local count = #self:GetShoppingRows(refreshPlan, true)
+  if count == 0 then
+    return true, "All candidate materials in this range are sold by vendors; no auction scan is needed."
+  end
   local ok, message = self:Search(refreshPlan)
   local capText = refreshPlan.refreshQuantityCap and string.format("; alternative quantities capped at %d", refreshPlan.refreshQuantityCap) or ""
-  return ok, ok and string.format("Refreshing all %d candidate materials and recipes%s", count, capText) or message
+  return ok, ok and string.format(
+    "Refreshing %d materials for skill %d-%d%s",
+    count, refreshPlan.fromSkill, refreshPlan.toSkill, capText
+  ) or message
 end
 
 function SPP.Auctionator:SearchRecipeOpportunities(plan)
@@ -173,7 +193,7 @@ end
 function SPP.Auctionator:GetSearchStrings(plan, advanced)
   local api = Auctionator and Auctionator.API and Auctionator.API.v1
   local terms = {}
-  for _, row in ipairs(self:GetShoppingRows(plan)) do
+  for _, row in ipairs(self:GetShoppingRows(plan, true)) do
     if advanced and api and api.ConvertToSearchString then
       table.insert(terms, api.ConvertToSearchString(CALLER, {
         searchString = row.name, isExact = true, quantity = row.quantity
@@ -197,17 +217,19 @@ function SPP.Auctionator:CreateList(plan)
 end
 
 function SPP.Auctionator:Search(plan)
-  local api = Auctionator and Auctionator.API and Auctionator.API.v1
-  if not api then return false, "Auctionator is not installed" end
-  local rows, unresolved = self:GetShoppingRows(plan)
+  local rows, unresolved = self:GetShoppingRows(plan, true)
   if #unresolved > 0 then
     return false, "Missing item names for IDs: " .. table.concat(unresolved, ", ")
   end
-  if #rows == 0 then return false, "The route has nothing left to buy" end
+  if #rows == 0 then return false, "All required materials are sold by vendors; no auction search is needed." end
+  local api = Auctionator and Auctionator.API and Auctionator.API.v1
+  if not api then return false, "Auctionator is not installed" end
   if not self:IsAuctionHouseOpen() then return false, "Open the Auction House before starting the search" end
   self:RegisterSearchEvents()
   self.collecting = self.eventsRegistered or false
-  self.activePlan = plan
+  local auctionShopping = {}
+  for _, row in ipairs(rows) do auctionShopping[row.itemId] = row.quantity end
+  self.activePlan = { shopping = auctionShopping }
   local ok, message
   if api.MultiSearchAdvanced then
     local terms = {}

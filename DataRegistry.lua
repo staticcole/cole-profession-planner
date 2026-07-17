@@ -185,6 +185,11 @@ function SPP.Data:GetVendorPrice(itemId)
   return item and item[2] or nil
 end
 
+function SPP.Data:IsVendorItem(itemId)
+  local price = self:GetVendorPrice(itemId)
+  return type(price) == "number" and price > 0
+end
+
 function SPP.Data:GetColor(recipe, skill)
   local R = SPP.R
   if skill < recipe[R.LEARN] then return "locked" end

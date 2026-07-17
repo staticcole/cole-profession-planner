@@ -1,8 +1,21 @@
 SPP.Price = SPP.Price or { cache = {}, craftCache = {}, choiceCache = {} }
 local CALLER = "ColeProfessionPlanner"
+local BULK_CRAFT_SAVINGS_THRESHOLD = 0.15
+local BULK_LEATHER_UPGRADES = {
+  [20648] = true, -- Light Leather -> Medium Leather
+  [20649] = true, -- Medium Leather -> Heavy Leather
+  [20650] = true, -- Heavy Leather -> Thick Leather
+  [22331] = true, -- Thick Leather -> Rugged Leather
+  [32455] = true, -- Knothide Leather -> Heavy Knothide Leather
+  [50936] = true  -- Borean Leather -> Heavy Borean Leather
+}
 
 local function validPrice(value)
   return type(value) == "number" and value > 0 and value < 100000000000
+end
+
+local function reliableBulkProvider(provider)
+  return provider == "Auctionator (quantity)" or provider == "Manual"
 end
 
 function SPP.Price:ClearCache()
@@ -73,6 +86,9 @@ function SPP.Price:GetPlanAuctionAge(plan)
 end
 
 function SPP.Price:GetUnitPrice(itemId)
+  local vendor = SPP.Data:GetVendorPrice(itemId)
+  if validPrice(vendor) then return vendor, "Vendor" end
+
   local best, provider
   local manual = ColeProfessionPlannerDB and ColeProfessionPlannerDB.manualPrices and ColeProfessionPlannerDB.manualPrices[itemId]
   if validPrice(manual) then best, provider = manual, "Manual" end
@@ -80,8 +96,6 @@ function SPP.Price:GetUnitPrice(itemId)
   local auction, auctionProvider = self:GetAuctionPrice(itemId)
   if validPrice(auction) and (not best or auction < best) then best, provider = auction, auctionProvider end
 
-  local vendor = SPP.Data:GetVendorPrice(itemId)
-  if validPrice(vendor) and (not best or vendor < best) then best, provider = vendor, "Vendor" end
   return best, provider
 end
 
@@ -128,15 +142,28 @@ function SPP.Price:GetEffectivePrice(itemId, options, visiting)
   if visiting[itemId] then return self:GetUnitPrice(itemId) end
   visiting[itemId] = true
 
-  local best = self:GetUnitPrice(itemId)
+  local best, buyProvider = self:GetUnitPrice(itemId)
   local choice = best and { type = "buy" } or nil
   for _, recipe in ipairs(SPP.Data.outputs[itemId] or {}) do
     if self:CanCraftRecipe(recipe, options)
       and SPP.Data:IsAvailable(recipe[SPP.R.EXPANSION], recipe[SPP.R.PHASE], options.maxExpansion or 3, options.maxPhase or 9) then
       local cost = self:GetRecipeCost(recipe, options, visiting)
-      if cost then
+      local isBulkLeatherUpgrade = BULK_LEATHER_UPGRADES[recipe[SPP.R.SPELL]]
+      local reliableBulkPrices = true
+      if isBulkLeatherUpgrade then
+        reliableBulkPrices = best and reliableBulkProvider(buyProvider)
+        local reagents = recipe[SPP.R.REAGENTS]
+        for index = 1, #reagents, 2 do
+          local _, provider = self:GetUnitPrice(reagents[index])
+          if not reliableBulkProvider(provider) then reliableBulkPrices = false break end
+        end
+      end
+      if cost and reliableBulkPrices then
         cost = cost / (recipe[SPP.R.OUTPUT_QTY] or 1)
-        if not best or cost < best then best, choice = cost, { type = "recipe", recipe = recipe } end
+        local requiredSavings = isBulkLeatherUpgrade and BULK_CRAFT_SAVINGS_THRESHOLD or 0
+        if (not best and not isBulkLeatherUpgrade) or (best and cost <= best * (1 - requiredSavings)) then
+          best, choice = cost, { type = "recipe", recipe = recipe }
+        end
       end
     end
   end
