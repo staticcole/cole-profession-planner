@@ -6,7 +6,13 @@ local COLORS = {
 }
 local EXPANSIONS = { "Vanilla", "The Burning Crusade" }
 local PRICE_TTL_SECONDS = 30 * 60
+local VISIBLE_PLAN_ROWS = 8
+local VISIBLE_SHOPPING_ROWS = 10
 local BAR_RELATED_PROFESSIONS = { blacksmithing = true, engineering = true, jewelcrafting = true }
+local ROUTE_MODES = {
+  { value = "fast", label = "Fast - orange first" },
+  { value = "economy", label = "Economy - green allowed" }
+}
 
 local function currentTime()
   local serverTime = GetServerTime and GetServerTime() or nil
@@ -55,6 +61,39 @@ local function itemTexture(itemId)
   if itemId and C_Item and C_Item.GetItemIconByID then texture = C_Item.GetItemIconByID(itemId) end
   if not texture and itemId and GetItemIcon then texture = GetItemIcon(itemId) end
   return texture or "Interface\\Icons\\INV_Misc_Bag_10"
+end
+
+local function formatQuantity(quantity)
+  local rounded = math.floor(quantity + 0.5)
+  if math.abs(quantity - rounded) < 0.05 then return tostring(rounded) end
+  return string.format("%.1f", quantity)
+end
+
+local function formatDuration(seconds, estimated)
+  local total = math.max(0, math.floor((seconds or 0) + 0.5))
+  local minutes = math.floor(total / 60)
+  local remainder = total % 60
+  local text = minutes > 0 and string.format("%dm %02ds", minutes, remainder) or (remainder .. "s")
+  return estimated and ("~" .. text) or text
+end
+
+local function getStepMaterialRows(step)
+  local rows = {}
+  for itemId, quantity in pairs(step and step.materials or {}) do
+    if quantity > 0.001 then
+      table.insert(rows, { itemId = itemId, name = SPP.Data:GetItemName(itemId), quantity = quantity })
+    end
+  end
+  table.sort(rows, function(a, b) return a.name < b.name end)
+  return rows
+end
+
+local function formatStepMaterials(step)
+  local parts = {}
+  for _, material in ipairs(getStepMaterialRows(step)) do
+    table.insert(parts, material.name .. " x" .. formatQuantity(material.quantity))
+  end
+  return #parts > 0 and table.concat(parts, ", ") or "No shopping materials"
 end
 
 function SPP.UI:CacheTradeSkillIcons()
@@ -222,28 +261,64 @@ end
 
 function SPP.UI:CreatePlanRow(parent, index)
   local row = CreateFrame("Button", nil, parent)
-  row:SetHeight(32)
+  row:SetHeight(40)
   row:SetFrameLevel(parent:GetFrameLevel() + 1)
   row:SetPoint("TOPLEFT", 8, -30 - ((index - 1) * 34))
   row:SetPoint("TOPRIGHT", -8, -30 - ((index - 1) * 34))
   row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
   row.skill = label(row, "")
   row.skill:SetPoint("LEFT", 34, 0)
-  row.skill:SetWidth(70)
+  row.skill:SetWidth(58)
   row.icon = row:CreateTexture(nil, "ARTWORK")
   row.icon:SetSize(26, 26)
   row.icon:SetPoint("LEFT", 3, 0)
   row.name = label(row, "")
-  row.name:SetPoint("LEFT", 105, 0)
-  row.name:SetWidth(280)
+  row.name:SetPoint("TOPLEFT", 94, -3)
+  row.name:SetPoint("RIGHT", -199, 0)
   row.name:SetJustifyH("LEFT")
+  row.materials = label(row, "", "GameFontDisableSmall")
+  row.materials:SetPoint("BOTTOMLEFT", 94, 3)
+  row.materials:SetPoint("RIGHT", -199, 0)
+  row.materials:SetJustifyH("LEFT")
+  row.materials:SetTextColor(0.68, 0.74, 0.68)
   row.crafts = label(row, "")
-  row.crafts:SetPoint("LEFT", 395, 0)
-  row.crafts:SetWidth(100)
+  row.crafts:SetPoint("RIGHT", -151, 0)
+  row.crafts:SetWidth(42)
+  row.crafts:SetJustifyH("RIGHT")
+  row.time = label(row, "")
+  row.time:SetPoint("RIGHT", -99, 0)
+  row.time:SetWidth(48)
+  row.time:SetJustifyH("RIGHT")
   row.cost = label(row, "")
   row.cost:SetPoint("RIGHT", -5, 0)
-  row.cost:SetWidth(150)
+  row.cost:SetWidth(90)
   row.cost:SetJustifyH("RIGHT")
+  row:SetScript("OnEnter", function(self)
+    if not self.step then return end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText(self.step.recipe[SPP.R.NAME], 1, 1, 1)
+    GameTooltip:AddDoubleLine("Skill", self.step.fromSkill .. " - " .. self.step.toSkill, 0.7, 0.8, 1, 1, 1, 1)
+    GameTooltip:AddDoubleLine("Expected crafts", string.format("%.1f", self.step.expectedCrafts), 0.7, 0.8, 1, 1, 1, 1)
+    GameTooltip:AddDoubleLine("Craft time", formatDuration(self.step.craftSeconds, self.step.craftTimeEstimated), 0.7, 0.8, 1, 1, 1, 1)
+    if self.step.mandatory then
+      GameTooltip:AddLine("Required progression craft; planned exactly once.", 1, 0.82, 0.2, true)
+    end
+    GameTooltip:AddLine(" ")
+    GameTooltip:AddLine("Shopping materials for this step", 1, 0.82, 0)
+    local materials = getStepMaterialRows(self.step)
+    if #materials == 0 then
+      GameTooltip:AddLine("None; covered by bags or earlier crafted outputs.", 0.55, 0.85, 0.55, true)
+    else
+      for _, material in ipairs(materials) do
+        GameTooltip:AddDoubleLine(material.name, "x" .. formatQuantity(material.quantity), 0.9, 0.9, 0.9, 1, 1, 1)
+      end
+    end
+    if self.step.craftTimeEstimated then
+      GameTooltip:AddLine("Time uses the 3-second fallback because the client did not expose this recipe's cast time.", 0.75, 0.75, 0.75, true)
+    end
+    GameTooltip:Show()
+  end)
+  row:SetScript("OnLeave", function() GameTooltip:Hide() end)
   row:Hide()
   return row
 end
@@ -251,23 +326,23 @@ end
 function SPP.UI:CreateShoppingRow(parent, index)
   local row = CreateFrame("Button", nil, parent)
   row:SetHeight(32)
-  row:SetPoint("TOPLEFT", 8, -58 - ((index - 1) * 34))
-  row:SetPoint("TOPRIGHT", -8, -58 - ((index - 1) * 34))
+  row:SetPoint("TOPLEFT", 5, -72 - ((index - 1) * 34))
+  row:SetPoint("TOPRIGHT", -5, -72 - ((index - 1) * 34))
   row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
   row.icon = row:CreateTexture(nil, "ARTWORK")
-  row.icon:SetSize(26, 26)
+  row.icon:SetSize(24, 24)
   row.icon:SetPoint("LEFT", 3, 0)
   row.name = label(row, "")
-  row.name:SetPoint("LEFT", 38, 0)
-  row.name:SetWidth(390)
+  row.name:SetPoint("LEFT", 33, 0)
+  row.name:SetPoint("RIGHT", -128, 0)
   row.name:SetJustifyH("LEFT")
   row.quantity = label(row, "")
-  row.quantity:SetPoint("LEFT", 450, 0)
-  row.quantity:SetWidth(90)
+  row.quantity:SetPoint("RIGHT", -88, 0)
+  row.quantity:SetWidth(38)
   row.quantity:SetJustifyH("RIGHT")
   row.cost = label(row, "")
   row.cost:SetPoint("RIGHT", -6, 0)
-  row.cost:SetWidth(180)
+  row.cost:SetWidth(84)
   row.cost:SetJustifyH("RIGHT")
   row:Hide()
   return row
@@ -302,6 +377,7 @@ function SPP.UI:GetPricingOptions()
   return {
     maxExpansion = self.expansion, maxPhase = self.phase,
     includeRareRecipes = self.includeRareRecipes and self.includeRareRecipes:GetChecked() or true,
+    routeMode = self.routeMode == "fast" and "fast" or "economy",
     knownRecipes = self.knownRecipes, availableProfessions = available
   }
 end
@@ -360,10 +436,11 @@ function SPP.UI:Create()
   self.expansion = client.expansion
   self.phase = client.phase
   self.skill = knownProfessions[self.profession] and knownProfessions[self.profession].rank or 1
+  self.routeMode = ColeProfessionPlannerDB.routeMode == "fast" and "fast" or "economy"
 
   local frame = CreateFrame("Frame", "ColeProfessionPlannerFrame", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
   self.frame = frame
-  frame:SetSize(820, 600)
+  frame:SetSize(1050, 620)
   frame:SetPoint("CENTER")
   frame:SetFrameStrata("DIALOG")
   frame:SetMovable(true)
@@ -411,89 +488,47 @@ function SPP.UI:Create()
   local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
   close:SetPoint("TOPRIGHT", -5, -5)
 
-  self.planTab = button(frame, "Professions", 100, 24)
+  self.planTab = button(frame, "Planner", 100, 24)
   self.planTab:SetPoint("TOPLEFT", 18, -48)
-  self.shoppingTab = button(frame, "Shopping list", 110, 24)
-  self.shoppingTab:SetPoint("LEFT", self.planTab, "RIGHT", 4, 0)
-  self.browserTab = button(frame, "Recipes", 90, 24)
-  self.browserTab:SetPoint("LEFT", self.shoppingTab, "RIGHT", 4, 0)
+  self.browserTab = button(frame, "Recipe library", 112, 24)
+  self.browserTab:SetPoint("LEFT", self.planTab, "RIGHT", 4, 0)
   self.planTab:SetScript("OnClick", function() SPP.UI:SetMode("planner") end)
-  self.shoppingTab:SetScript("OnClick", function() SPP.UI:SetMode("shopping") end)
   self.browserTab:SetScript("OnClick", function() SPP.UI:SetMode("browser") end)
 
-  local professionValues = function()
-    return SPP.Client:GetProfessionChoices()
-  end
-  self.professionMenu = dropdown(frame, 155, professionValues, function(value)
-    self.profession = value
-    self.skill = 1
-    self:SyncProfessionSkill(true)
-    self.offset, self.planOffset, self.shoppingOffset, self.plan = 0, 0, 0, nil
-    self:Refresh()
+  self.provider = label(frame, "")
+  self.provider:SetPoint("TOPRIGHT", -180, -55)
+  self.provider:SetTextColor(0.55, 0.75, 1)
+  self.refreshPricesButton = button(frame, "Refresh range prices", 154, 24)
+  self.refreshPricesButton:SetPoint("TOPRIGHT", -18, -48)
+  self.refreshPricesButton:SetScript("OnClick", function()
+    local refreshPlan, buildMessage = self:BuildFullRefreshPlan()
+    local ok, message
+    if refreshPlan then
+      ok, message = SPP.Auctionator:RefreshPrices(refreshPlan)
+    else
+      ok, message = false, buildMessage
+    end
+    self.planError:SetTextColor(ok and 0.45 or 1, ok and 1 or 0.35, ok and 0.45 or 0.25)
+    self.planError:SetText(message or "")
   end)
-  self.professionMenu:SetPoint("TOPLEFT", 48, -80)
-  UIDropDownMenu_SetSelectedValue(self.professionMenu, self.profession)
-  UIDropDownMenu_SetText(self.professionMenu, professionChoices[1] and professionChoices[1].label or "Alchemy")
-  self.openProfessionButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-  self.openProfessionButton:SetSize(26, 26)
-  self.openProfessionButton:SetPoint("TOPLEFT", 12, -81)
-  self.openProfessionIcon = self.openProfessionButton:CreateTexture(nil, "ARTWORK")
-  self.openProfessionIcon:SetSize(18, 18)
-  self.openProfessionIcon:SetPoint("CENTER")
-  self.openProfessionButton:SetScript("OnClick", function()
-    local ok, message = self:OpenProfession()
-    if not ok and message then print("|cff75c94fCole:|r " .. message) end
-  end)
-  self.openProfessionButton:SetScript("OnEnter", function(control)
-    local known = SPP.Client:GetProfessions()[self.profession]
+  self.refreshPricesButton:SetScript("OnEnter", function(control)
     GameTooltip:SetOwner(control, "ANCHOR_BOTTOM")
-    GameTooltip:SetText(known and ("Open " .. known.name) or "Profession not learned")
+    GameTooltip:SetText("Refresh prices for the selected range")
+    GameTooltip:AddLine("Scans materials and unknown recipe items only for recipes that can give skill between From and To.", 1, 1, 1, true)
     GameTooltip:Show()
   end)
-  self.openProfessionButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
-  self:UpdateProfessionButton()
-
-  self.expansionMenu = dropdown(frame, 180, function() return EXPANSIONS end, function(value)
-    self.expansion = value
-    self.phase = SPP.Client:GetDefaultPhase(value)
-    if self.phaseMenu then
-      UIDropDownMenu_SetSelectedValue(self.phaseMenu, self.phase)
-      UIDropDownMenu_SetText(self.phaseMenu, phaseLabel(self.expansion, self.phase))
-    end
-    self.offset, self.plan = 0, nil
-    self:Refresh()
-  end)
-  self.expansionMenu:SetPoint("LEFT", self.professionMenu, "RIGHT", -8, 0)
-  UIDropDownMenu_SetSelectedValue(self.expansionMenu, self.expansion)
-  UIDropDownMenu_SetText(self.expansionMenu, EXPANSIONS[self.expansion])
-
-  self.phaseMenu = dropdown(frame, 104, function()
-    local maxPhase = self.expansion == 1 and 6 or self.expansion == 2 and 5 or 4
-    local values = {}
-    for phase = 1, maxPhase do table.insert(values, { value = phase, label = phaseLabel(self.expansion, phase) }) end
-    return values
-  end, function(value)
-    self.phase = value
-    self.offset, self.plan = 0, nil
-    self:Refresh()
-  end)
-  self.phaseMenu:SetPoint("LEFT", self.expansionMenu, "RIGHT", -8, 0)
-  UIDropDownMenu_SetSelectedValue(self.phaseMenu, self.phase)
-  UIDropDownMenu_SetText(self.phaseMenu, phaseLabel(self.expansion, self.phase))
-
-  self.provider = label(frame, "")
-  self.provider:SetPoint("TOPRIGHT", -20, -91)
-  self.provider:SetTextColor(0.55, 0.75, 1)
+  self.refreshPricesButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  self.refreshPricesButton:SetEnabled(true)
 
   self.browserPanel = CreateFrame("Frame", nil, frame)
-  self.browserPanel:SetPoint("TOPLEFT", 16, -120)
+  self.browserPanel:SetPoint("TOPLEFT", 16, -82)
   self.browserPanel:SetPoint("BOTTOMRIGHT", -16, 16)
   self.browserPanel:EnableMouseWheel(true)
   self.browserPanel:SetScript("OnMouseWheel", function(_, delta)
     self.offset = math.max(0, math.min(math.max(0, #self.filtered - 12), self.offset - delta * 3))
     self:UpdateBrowserRows()
   end)
-  self.search = editBox(self.browserPanel, 220, false)
+  self.search = editBox(self.browserPanel, 240, false)
   self.search:SetPoint("TOPLEFT", 4, -2)
   self.search:SetScript("OnTextChanged", function() self.offset = 0 self:UpdateBrowser() end)
   local rangeHeader = label(self.browserPanel, "Orange / Yellow / Green / Gray")
@@ -510,56 +545,171 @@ function SPP.UI:Create()
   self.browserCount:SetPoint("BOTTOMLEFT", 6, 1)
 
   self.planPanel = CreateFrame("Frame", nil, frame)
-  self.planPanel:SetPoint("TOPLEFT", 16, -120)
+  self.planPanel:SetPoint("TOPLEFT", 16, -82)
   self.planPanel:SetPoint("BOTTOMRIGHT", -16, 16)
-  self.planPanel:EnableMouseWheel(true)
-  self.planPanel:SetScript("OnMouseWheel", function(_, delta)
+
+  self.settingsPanel = CreateFrame("Frame", nil, self.planPanel)
+  self.settingsPanel:SetPoint("TOPLEFT")
+  self.settingsPanel:SetPoint("BOTTOMLEFT")
+  self.settingsPanel:SetWidth(220)
+  local settingsSeparator = self.planPanel:CreateTexture(nil, "BORDER")
+  settingsSeparator:SetPoint("TOPLEFT", self.settingsPanel, "TOPRIGHT", 2, 0)
+  settingsSeparator:SetPoint("BOTTOMLEFT", self.settingsPanel, "BOTTOMRIGHT", 2, 0)
+  settingsSeparator:SetWidth(1)
+  settingsSeparator:SetTexture("Interface\\Buttons\\WHITE8X8")
+  settingsSeparator:SetVertexColor(0.28, 0.32, 0.27, 0.8)
+
+  self.shoppingPanel = CreateFrame("Frame", nil, self.planPanel)
+  self.shoppingPanel:SetPoint("TOPRIGHT")
+  self.shoppingPanel:SetPoint("BOTTOMRIGHT")
+  self.shoppingPanel:SetWidth(278)
+  self.shoppingPanel:EnableMouseWheel(true)
+  self.shoppingPanel:SetScript("OnMouseWheel", function(_, delta)
+    local count = self.shoppingRowsData and #self.shoppingRowsData or 0
+    self.shoppingOffset = math.max(0, math.min(math.max(0, count - VISIBLE_SHOPPING_ROWS), self.shoppingOffset - delta * 3))
+    self:UpdateShoppingRows()
+  end)
+  local shoppingSeparator = self.planPanel:CreateTexture(nil, "BORDER")
+  shoppingSeparator:SetPoint("TOPRIGHT", self.shoppingPanel, "TOPLEFT", -2, 0)
+  shoppingSeparator:SetPoint("BOTTOMRIGHT", self.shoppingPanel, "BOTTOMLEFT", -2, 0)
+  shoppingSeparator:SetWidth(1)
+  shoppingSeparator:SetTexture("Interface\\Buttons\\WHITE8X8")
+  shoppingSeparator:SetVertexColor(0.28, 0.32, 0.27, 0.8)
+
+  self.routePanel = CreateFrame("Frame", nil, self.planPanel)
+  self.routePanel:SetPoint("TOPLEFT", self.settingsPanel, "TOPRIGHT", 8, 0)
+  self.routePanel:SetPoint("BOTTOMRIGHT", self.shoppingPanel, "BOTTOMLEFT", -8, 0)
+  self.routePanel:EnableMouseWheel(true)
+  self.routePanel:SetScript("OnMouseWheel", function(_, delta)
     local count = self.plan and #self.plan.steps or 0
-    self.planOffset = math.max(0, math.min(math.max(0, count - 10), self.planOffset - delta * 3))
+    self.planOffset = math.max(0, math.min(math.max(0, count - VISIBLE_PLAN_ROWS), self.planOffset - delta * 3))
     self:UpdatePlanRows()
   end)
-  local fromLabel = label(self.planPanel, "From")
-  fromLabel:SetPoint("TOPLEFT", 5, -7)
-  self.fromBox = editBox(self.planPanel, 50, true)
+
+  local settingsTitle = label(self.settingsPanel, "Plan profession", "GameFontNormal")
+  settingsTitle:SetPoint("TOPLEFT", 10, -8)
+
+  local professionValues = function()
+    return SPP.Client:GetProfessionChoices()
+  end
+  self.professionMenu = dropdown(self.settingsPanel, 145, professionValues, function(value)
+    self.profession = value
+    self.skill = 1
+    self:SyncProfessionSkill(true)
+    self.offset, self.planOffset, self.shoppingOffset, self.plan = 0, 0, 0, nil
+    self:Refresh()
+  end)
+  self.professionMenu:SetPoint("TOPLEFT", 38, -31)
+  UIDropDownMenu_SetSelectedValue(self.professionMenu, self.profession)
+  UIDropDownMenu_SetText(self.professionMenu, professionChoices[1] and professionChoices[1].label or "Alchemy")
+  self.openProfessionButton = CreateFrame("Button", nil, self.settingsPanel, "UIPanelButtonTemplate")
+  self.openProfessionButton:SetSize(26, 26)
+  self.openProfessionButton:SetPoint("TOPLEFT", 8, -32)
+  self.openProfessionIcon = self.openProfessionButton:CreateTexture(nil, "ARTWORK")
+  self.openProfessionIcon:SetSize(18, 18)
+  self.openProfessionIcon:SetPoint("CENTER")
+  self.openProfessionButton:SetScript("OnClick", function()
+    local ok, message = self:OpenProfession()
+    if not ok and message then print("|cff75c94fCole:|r " .. message) end
+  end)
+  self.openProfessionButton:SetScript("OnEnter", function(control)
+    local known = SPP.Client:GetProfessions()[self.profession]
+    GameTooltip:SetOwner(control, "ANCHOR_BOTTOM")
+    GameTooltip:SetText(known and ("Open " .. known.name) or "Profession not learned")
+    GameTooltip:Show()
+  end)
+  self.openProfessionButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  self:UpdateProfessionButton()
+
+  self.expansionMenu = dropdown(self.settingsPanel, 174, function() return EXPANSIONS end, function(value)
+    self.expansion = value
+    self.phase = SPP.Client:GetDefaultPhase(value)
+    if self.phaseMenu then
+      UIDropDownMenu_SetSelectedValue(self.phaseMenu, self.phase)
+      UIDropDownMenu_SetText(self.phaseMenu, phaseLabel(self.expansion, self.phase))
+    end
+    self.offset, self.plan = 0, nil
+    self:Refresh()
+  end)
+  self.expansionMenu:SetPoint("TOPLEFT", 0, -70)
+  UIDropDownMenu_SetSelectedValue(self.expansionMenu, self.expansion)
+  UIDropDownMenu_SetText(self.expansionMenu, EXPANSIONS[self.expansion])
+
+  self.phaseMenu = dropdown(self.settingsPanel, 174, function()
+    local maxPhase = self.expansion == 1 and 6 or self.expansion == 2 and 5 or 4
+    local values = {}
+    for phase = 1, maxPhase do table.insert(values, { value = phase, label = phaseLabel(self.expansion, phase) }) end
+    return values
+  end, function(value)
+    self.phase = value
+    self.offset, self.plan = 0, nil
+    self:Refresh()
+  end)
+  self.phaseMenu:SetPoint("TOPLEFT", 0, -105)
+  UIDropDownMenu_SetSelectedValue(self.phaseMenu, self.phase)
+  UIDropDownMenu_SetText(self.phaseMenu, phaseLabel(self.expansion, self.phase))
+
+  local fromLabel = label(self.settingsPanel, "From")
+  fromLabel:SetPoint("TOPLEFT", 10, -151)
+  self.fromBox = editBox(self.settingsPanel, 50, true)
   self.fromBox:SetPoint("LEFT", fromLabel, "RIGHT", 7, 0)
   self.fromBox:SetText(self.skill)
-  local toLabel = label(self.planPanel, "To")
+  local toLabel = label(self.settingsPanel, "To")
   toLabel:SetPoint("LEFT", self.fromBox, "RIGHT", 14, 0)
-  self.toBox = editBox(self.planPanel, 50, true)
+  self.toBox = editBox(self.settingsPanel, 50, true)
   self.toBox:SetPoint("LEFT", toLabel, "RIGHT", 7, 0)
   self.toBox:SetText(client.maxSkill)
-  self.buildButton = button(self.planPanel, "Calculate", 100, 24)
-  self.buildButton:SetPoint("LEFT", self.toBox, "RIGHT", 15, 0)
-  self.buildButton:SetScript("OnClick", function() self:BuildPlan() end)
-  self.useBags = CreateFrame("CheckButton", nil, self.planPanel, "UICheckButtonTemplate")
+
+  local modeLabel = label(self.settingsPanel, "Calculation mode")
+  modeLabel:SetPoint("TOPLEFT", 10, -184)
+  self.routeModeMenu = dropdown(self.settingsPanel, 174, function() return ROUTE_MODES end, function(value)
+    self.routeMode = value == "fast" and "fast" or "economy"
+    ColeProfessionPlannerDB.routeMode = self.routeMode
+    self.plan, self.planMessage = nil, nil
+    self.planOffset, self.shoppingOffset = 0, 0
+    self:Refresh()
+  end)
+  self.routeModeMenu:SetPoint("TOPLEFT", 0, -199)
+  UIDropDownMenu_SetSelectedValue(self.routeModeMenu, self.routeMode)
+  UIDropDownMenu_SetText(self.routeModeMenu, self.routeMode == "fast" and ROUTE_MODES[1].label or ROUTE_MODES[2].label)
+  self.routeModeMenu:SetScript("OnEnter", function(control)
+    GameTooltip:SetOwner(control, "ANCHOR_RIGHT")
+    GameTooltip:SetText("Calculation mode")
+    GameTooltip:AddLine("Fast favors guaranteed orange skill-ups and shorter craft time.", 1, 1, 1, true)
+    GameTooltip:AddLine("Economy allows green recipes and minimizes the full material cost.", 0.75, 0.9, 0.75, true)
+    GameTooltip:Show()
+  end)
+  self.routeModeMenu:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+  self.useBags = CreateFrame("CheckButton", nil, self.settingsPanel, "UICheckButtonTemplate")
   self.useBags:SetSize(24, 24)
-  self.useBags:SetPoint("LEFT", self.buildButton, "RIGHT", 12, 0)
+  self.useBags:SetPoint("TOPLEFT", 7, -240)
   self.useBags:SetChecked(true)
-  self.useBagsLabel = label(self.planPanel, "Bags/bank")
+  self.useBagsLabel = label(self.settingsPanel, "Bags/bank")
   self.useBagsLabel:SetPoint("LEFT", self.useBags, "RIGHT", 2, 0)
-  self.useBagsLabel:SetWidth(80)
+  self.useBagsLabel:SetWidth(150)
   self.useBagsLabel:SetJustifyH("LEFT")
   self.useBags:SetScript("OnEnter", function(control)
-    GameTooltip:SetOwner(control, "ANCHOR_BOTTOM")
+    GameTooltip:SetOwner(control, "ANCHOR_RIGHT")
     GameTooltip:SetText("Use current bags and bank")
     local provider = SPP.Inventory:GetAltProviderName()
     GameTooltip:AddLine(provider and ("Bank cache: " .. provider) or "Current bags are available; install Baganator or Bagnon to include the bank while away from it.", 1, 1, 1, true)
     GameTooltip:Show()
   end)
   self.useBags:SetScript("OnLeave", function() GameTooltip:Hide() end)
-  self.useAlts = CreateFrame("CheckButton", nil, self.planPanel, "UICheckButtonTemplate")
+  self.useAlts = CreateFrame("CheckButton", nil, self.settingsPanel, "UICheckButtonTemplate")
   self.useAlts:SetSize(24, 24)
-  self.useAlts:SetPoint("LEFT", self.useBagsLabel, "RIGHT", 8, 0)
+  self.useAlts:SetPoint("TOPLEFT", 7, -269)
   self.useAlts:SetChecked(ColeProfessionPlannerDB.useAltInventory == true)
-  self.useAltsLabel = label(self.planPanel, "Alts/banks")
+  self.useAltsLabel = label(self.settingsPanel, "Alts/banks")
   self.useAltsLabel:SetPoint("LEFT", self.useAlts, "RIGHT", 2, 0)
-  self.useAltsLabel:SetWidth(80)
+  self.useAltsLabel:SetWidth(150)
   self.useAltsLabel:SetJustifyH("LEFT")
   self.useAlts:SetScript("OnClick", function(control)
     ColeProfessionPlannerDB.useAltInventory = control:GetChecked() == true
   end)
   self.useAlts:SetScript("OnEnter", function(control)
-    GameTooltip:SetOwner(control, "ANCHOR_BOTTOM")
+    GameTooltip:SetOwner(control, "ANCHOR_RIGHT")
     GameTooltip:SetText("Use alt bags and banks")
     local provider = SPP.Inventory:GetAltProviderName()
     GameTooltip:AddLine(provider and ("Inventory cache: " .. provider) or "Install Baganator or Bagnon to cache alt inventory.", 1, 1, 1, true)
@@ -567,115 +717,114 @@ function SPP.UI:Create()
     GameTooltip:Show()
   end)
   self.useAlts:SetScript("OnLeave", function() GameTooltip:Hide() end)
-  self.includeRareRecipes = CreateFrame("CheckButton", nil, self.planPanel, "UICheckButtonTemplate")
+  self.includeRareRecipes = CreateFrame("CheckButton", nil, self.settingsPanel, "UICheckButtonTemplate")
   self.includeRareRecipes:SetSize(24, 24)
-  self.includeRareRecipes:SetPoint("LEFT", self.useAltsLabel, "RIGHT", 8, 0)
+  self.includeRareRecipes:SetPoint("TOPLEFT", 7, -298)
   self.includeRareRecipes:SetChecked(true)
-  self.includeRareRecipesLabel = label(self.planPanel, "AH recipes")
+  self.includeRareRecipesLabel = label(self.settingsPanel, "Auction recipes")
   self.includeRareRecipesLabel:SetPoint("LEFT", self.includeRareRecipes, "RIGHT", 2, 0)
   self.includeRareRecipes:SetScript("OnEnter", function(control)
-    GameTooltip:SetOwner(control, "ANCHOR_BOTTOM")
+    GameTooltip:SetOwner(control, "ANCHOR_RIGHT")
     GameTooltip:SetText("Consider unknown recipes")
-    GameTooltip:AddLine("Compare drop, quest, reputation and other recipes. Their Auctionator price is included before Cole uses them.", 1, 1, 1, true)
+    GameTooltip:AddLine("An unknown drop, quest or reputation recipe is used only after a fresh Auctionator scan confirms at least one copy for sale.", 1, 1, 1, true)
     GameTooltip:Show()
   end)
   self.includeRareRecipes:SetScript("OnLeave", function() GameTooltip:Hide() end)
-  self.totalLabel = label(self.planPanel, "")
-  self.totalLabel:SetPoint("TOPRIGHT", -6, -39)
+
+  self.buildButton = button(self.settingsPanel, "Calculate route", 188, 28)
+  self.buildButton:SetPoint("TOPLEFT", 10, -335)
+  self.buildButton:SetScript("OnClick", function() self:BuildPlan() end)
+
+  self.totalLabel = label(self.settingsPanel, "")
+  self.totalLabel:SetPoint("TOPLEFT", 10, -377)
+  self.totalLabel:SetWidth(190)
+  self.totalLabel:SetJustifyH("LEFT")
   self.totalLabel:SetFontObject("GameFontNormal")
-  self.miningNote = label(self.planPanel, "")
-  self.miningNote:SetPoint("TOPLEFT", 5, -39)
-  self.miningNote:SetWidth(500)
+  self.selectionLabel = label(self.settingsPanel, "", "GameFontDisableSmall")
+  self.selectionLabel:SetPoint("TOPLEFT", 10, -400)
+  self.selectionLabel:SetWidth(190)
+  self.selectionLabel:SetJustifyH("LEFT")
+  self.miningNote = label(self.settingsPanel, "")
+  self.miningNote:SetPoint("TOPLEFT", 10, -435)
+  self.miningNote:SetWidth(190)
   self.miningNote:SetJustifyH("LEFT")
   self:UpdateMiningNote()
-  local planSkillHeader = label(self.planPanel, "Skill")
-  planSkillHeader:SetPoint("TOPLEFT", 12, -69)
-  local planRecipeHeader = label(self.planPanel, "Recipe")
-  planRecipeHeader:SetPoint("TOPLEFT", 113, -69)
-  local planCraftHeader = label(self.planPanel, "Expected crafts")
-  planCraftHeader:SetPoint("TOPLEFT", 403, -69)
-  local planCostHeader = label(self.planPanel, "Cost")
-  planCostHeader:SetPoint("TOPRIGHT", -14, -69)
+
+  local routeTitle = label(self.routePanel, "Leveling route", "GameFontNormal")
+  routeTitle:SetPoint("TOPLEFT", 8, -8)
+  local planSkillHeader = label(self.routePanel, "Skill")
+  planSkillHeader:SetPoint("TOPLEFT", 12, -34)
+  local planRecipeHeader = label(self.routePanel, "Recipe and materials")
+  planRecipeHeader:SetPoint("TOPLEFT", 102, -34)
+  local planCraftHeader = label(self.routePanel, "Crafts")
+  planCraftHeader:SetPoint("TOPRIGHT", -151, -34)
+  local planTimeHeader = label(self.routePanel, "Time")
+  planTimeHeader:SetPoint("TOPRIGHT", -101, -34)
+  local planCostHeader = label(self.routePanel, "Cost")
+  planCostHeader:SetPoint("TOPRIGHT", -8, -34)
   self.planRows = {}
-  for i = 1, 10 do
-    self.planRows[i] = self:CreatePlanRow(self.planPanel, i)
+  for i = 1, VISIBLE_PLAN_ROWS do
+    self.planRows[i] = self:CreatePlanRow(self.routePanel, i)
     self.planRows[i]:ClearAllPoints()
-    self.planRows[i]:SetPoint("TOPLEFT", 8, -86 - ((i - 1) * 34))
-    self.planRows[i]:SetPoint("TOPRIGHT", -8, -86 - ((i - 1) * 34))
+    self.planRows[i]:SetPoint("TOPLEFT", 4, -48 - ((i - 1) * 46))
+    self.planRows[i]:SetPoint("TOPRIGHT", -4, -48 - ((i - 1) * 46))
   end
-  self.planError = label(self.planPanel, "")
+  self.planError = label(self.routePanel, "")
   self.planError:SetPoint("BOTTOMLEFT", 6, 2)
   self.planError:SetPoint("BOTTOMRIGHT", -6, 2)
   self.planError:SetTextColor(1, 0.35, 0.25)
-  self.refreshPricesButton = button(self.planPanel, "Refresh all prices", 136, 22)
-  self.refreshPricesButton:SetPoint("TOPRIGHT", -6, -2)
-  self.refreshPricesButton:SetScript("OnClick", function()
-    local refreshPlan, buildMessage = self:BuildFullRefreshPlan()
-    local ok, message
-    if refreshPlan then
-      ok, message = SPP.Auctionator:RefreshPrices(refreshPlan)
-    else
-      ok, message = false, buildMessage
-    end
-    self.planError:SetTextColor(ok and 0.45 or 1, ok and 1 or 0.35, ok and 0.45 or 0.25)
-    self.planError:SetText(message or "")
-  end)
-  self.refreshPricesButton:SetEnabled(true)
 
-  self.shoppingPanel = CreateFrame("Frame", nil, frame)
-  self.shoppingPanel:SetPoint("TOPLEFT", 16, -120)
-  self.shoppingPanel:SetPoint("BOTTOMRIGHT", -16, 16)
-  self.shoppingPanel:EnableMouseWheel(true)
-  self.shoppingPanel:SetScript("OnMouseWheel", function(_, delta)
-    local count = self.shoppingRowsData and #self.shoppingRowsData or 0
-    self.shoppingOffset = math.max(0, math.min(math.max(0, count - 12), self.shoppingOffset - delta * 3))
-    self:UpdateShoppingRows()
-  end)
-  self.listButton = button(self.shoppingPanel, "Create Auctionator list", 166, 24)
-  self.listButton:SetPoint("TOPLEFT", 5, -2)
+  local shoppingTitle = label(self.shoppingPanel, "Shopping list", "GameFontNormal")
+  shoppingTitle:SetPoint("TOPLEFT", 8, -8)
+  self.shoppingTotal = label(self.shoppingPanel, "")
+  self.shoppingTotal:SetPoint("TOPLEFT", 8, -29)
+  self.shoppingTotal:SetPoint("TOPRIGHT", -8, -29)
+  self.shoppingTotal:SetJustifyH("LEFT")
+  self.shoppingTotal:SetFontObject("GameFontNormal")
+  local materialHeader = label(self.shoppingPanel, "Material")
+  materialHeader:SetPoint("TOPLEFT", 38, -56)
+  local quantityHeader = label(self.shoppingPanel, "Need")
+  quantityHeader:SetPoint("TOPRIGHT", -91, -56)
+  local materialCostHeader = label(self.shoppingPanel, "Cost")
+  materialCostHeader:SetPoint("TOPRIGHT", -8, -56)
+  self.shoppingRows = {}
+  for i = 1, VISIBLE_SHOPPING_ROWS do self.shoppingRows[i] = self:CreateShoppingRow(self.shoppingPanel, i) end
+  self.shoppingStatus = label(self.shoppingPanel, "")
+  self.shoppingStatus:SetPoint("BOTTOMLEFT", 7, 64)
+  self.shoppingStatus:SetPoint("BOTTOMRIGHT", -7, 64)
+  self.shoppingStatus:SetHeight(38)
+  self.shoppingStatus:SetJustifyH("LEFT")
+  self.shoppingStatus:SetTextColor(1, 0.35, 0.25)
+
+  self.listButton = button(self.shoppingPanel, "Create list", 124, 24)
+  self.listButton:SetPoint("BOTTOMLEFT", 7, 35)
   self.listButton:SetScript("OnClick", function()
     local ok, message = SPP.Auctionator:CreateList(self.plan)
     self.shoppingStatus:SetTextColor(ok and 0.45 or 1, ok and 1 or 0.35, ok and 0.45 or 0.25)
     self.shoppingStatus:SetText(message or "")
   end)
-  self.searchButton = button(self.shoppingPanel, "Search materials", 132, 24)
-  self.searchButton:SetPoint("LEFT", self.listButton, "RIGHT", 6, 0)
-  self.searchButton:SetScript("OnClick", function()
-    local ok, message = SPP.Auctionator:Search(self.plan)
-    self.shoppingStatus:SetTextColor(ok and 0.45 or 1, ok and 1 or 0.35, ok and 0.45 or 0.25)
-    self.shoppingStatus:SetText(message or "")
-  end)
-  self.recipeSearchButton = button(self.shoppingPanel, "Search cheaper recipes", 158, 24)
-  self.recipeSearchButton:SetPoint("LEFT", self.searchButton, "RIGHT", 6, 0)
+  self.recipeSearchButton = button(self.shoppingPanel, "Recipe prices", 124, 24)
+  self.recipeSearchButton:SetPoint("BOTTOMRIGHT", -7, 35)
   self.recipeSearchButton:SetScript("OnClick", function()
     local ok, message = SPP.Auctionator:SearchRecipeOpportunities(self.plan)
     self.shoppingStatus:SetTextColor(ok and 0.45 or 1, ok and 1 or 0.35, ok and 0.45 or 0.25)
     self.shoppingStatus:SetText(message or "")
   end)
-  self.shoppingTotal = label(self.shoppingPanel, "")
-  self.shoppingTotal:SetPoint("TOPRIGHT", -6, -7)
-  self.shoppingTotal:SetFontObject("GameFontNormal")
-  local materialHeader = label(self.shoppingPanel, "Material")
-  materialHeader:SetPoint("TOPLEFT", 46, -41)
-  local quantityHeader = label(self.shoppingPanel, "Need")
-  quantityHeader:SetPoint("TOPLEFT", 480, -41)
-  local materialCostHeader = label(self.shoppingPanel, "Estimated cost")
-  materialCostHeader:SetPoint("TOPRIGHT", -14, -41)
-  self.shoppingRows = {}
-  for i = 1, 12 do self.shoppingRows[i] = self:CreateShoppingRow(self.shoppingPanel, i) end
-  self.shoppingStatus = label(self.shoppingPanel, "")
-  self.shoppingStatus:SetPoint("BOTTOMLEFT", 6, 2)
-  self.shoppingStatus:SetPoint("BOTTOMRIGHT", -6, 2)
-  self.shoppingStatus:SetTextColor(1, 0.35, 0.25)
+  self.searchButton = button(self.shoppingPanel, "Search at Auction House", 250, 26)
+  self.searchButton:SetPoint("BOTTOM", 0, 6)
+  self.searchButton:SetScript("OnClick", function()
+    local ok, message = SPP.Auctionator:Search(self.plan)
+    self.shoppingStatus:SetTextColor(ok and 0.45 or 1, ok and 1 or 0.35, ok and 0.45 or 0.25)
+    self.shoppingStatus:SetText(message or "")
+  end)
 
   self:SetMode("planner")
 end
 
 function SPP.UI:SetMode(mode)
-  self.mode = mode
-  self.browserPanel:SetShown(mode == "browser")
-  self.planPanel:SetShown(mode == "planner")
-  self.shoppingPanel:SetShown(mode == "shopping")
+  self.mode = mode == "browser" and "browser" or "planner"
+  self.browserPanel:SetShown(self.mode == "browser")
+  self.planPanel:SetShown(self.mode == "planner")
   self:Refresh()
 end
 
@@ -729,7 +878,6 @@ function SPP.UI:BuildPlan()
   options.inventory = inventory
   local plan, message, priceScan = SPP.Planner:Build(self.profession, fromSkill, toSkill, options)
   self.plan, self.planMessage = plan or priceScan, message
-  self.shoppingTab:SetEnabled(self.plan ~= nil)
   if self.useBags:GetChecked() then
     self.useBagsLabel:SetText("Bags/bank " .. SPP.Inventory:GetRelevantCount(currentInventory))
   else
@@ -739,9 +887,8 @@ function SPP.UI:BuildPlan()
   self.planOffset, self.shoppingOffset = 0, 0
   self:UpdatePlanRows()
   self:UpdateShoppingRows()
-  if self.plan and self.plan.priceDiscovery then self:SetMode("shopping") end
   if altProviderMissing then
-    local status = self.mode == "shopping" and self.shoppingStatus or self.planError
+    local status = self.shoppingStatus or self.planError
     status:SetTextColor(1, 0.82, 0.2)
     status:SetText("Alt inventory needs Baganator or Bagnon; the route used current bags only.")
   end
@@ -756,11 +903,19 @@ function SPP.UI:BuildFullRefreshPlan()
   local options = self:GetPricingOptions()
   local refreshShopping = SPP.Planner:BuildRefreshShopping(self.profession, fromSkill, toSkill, options)
   if not next(refreshShopping) then return nil, "No eligible recipe materials in this range" end
+  local existingPlan = self.plan
+  local planMatchesRange = existingPlan
+    and existingPlan.profession == self.profession
+    and existingPlan.fromSkill == fromSkill
+    and existingPlan.toSkill == toSkill
+    and existingPlan.maxExpansion == self.expansion
+    and existingPlan.maxPhase == self.phase
   return {
     profession = self.profession, fromSkill = fromSkill, toSkill = toSkill,
-    shopping = self.plan and self.plan.profession == self.profession and self.plan.shopping or {},
+    maxExpansion = self.expansion, maxPhase = self.phase,
+    shopping = planMatchesRange and existingPlan.shopping or {},
     refreshShopping = refreshShopping,
-    recipeOpportunities = self.plan and self.plan.profession == self.profession and self.plan.recipeOpportunities or {},
+    recipeOpportunities = planMatchesRange and existingPlan.recipeOpportunities or {},
     refreshQuantityCap = SPP.Planner:GetRefreshQuantityCap(), fullMarketRefresh = true
   }
 end
@@ -770,15 +925,20 @@ function SPP.UI:UpdatePlanRows()
   for index, row in ipairs(self.planRows) do
     local step = steps[self.planOffset + index]
     if not step then row:Hide() else
+      row.step = step
       row:Show()
       row.skill:SetText(step.fromSkill .. " - " .. step.toSkill)
       row.name:SetText(step.recipe[SPP.R.NAME])
       row.icon:SetTexture(recipeIcon(step.recipe))
+      row.materials:SetText(formatStepMaterials(step))
       row.crafts:SetText(string.format("%.1f", step.expectedCrafts))
+      row.time:SetText(formatDuration(step.craftSeconds, step.craftTimeEstimated))
       row.cost:SetText(SPP:FormatMoney(step.cost)
         .. (step.usedInventory and "  |cff75c94fbags|r" or "")
-        .. (step.acquisitionItem and "  |cffffd34erecipe|r" or ""))
+        .. (step.acquisitionItem and "  |cffffd34erecipe|r" or "")
+        .. (step.mandatory and "  |cffffd34erequired|r" or ""))
     end
+    if not step then row.step = nil end
   end
   local bagSuffix = self.plan and self.plan.usedInventory and " + bags" or ""
   if self.plan and self.plan.priceDiscovery then
@@ -786,19 +946,36 @@ function SPP.UI:UpdatePlanRows()
   else
     self.totalLabel:SetText(self.plan and ("Total: " .. SPP:FormatMoney(self.plan.totalCost) .. bagSuffix) or "")
   end
-  self.listButton:SetText(self.plan and self.plan.priceDiscovery and "Create scan list" or "Create Auctionator list")
-  self.searchButton:SetText(self.plan and self.plan.priceDiscovery and "Scan prices" or "Search materials")
+  local totalSeconds = 0
+  for _, step in ipairs(steps) do totalSeconds = totalSeconds + (step.craftSeconds or 0) end
+  if self.selectionLabel then
+    local selection = self.plan and self.plan.selection or (self.routeMode == "fast"
+      and "Fast: orange recipes first"
+      or "Economy: green recipes allowed")
+    self.selectionLabel:SetText(selection .. (self.plan and ("\nCraft time: " .. formatDuration(totalSeconds)) or ""))
+  end
+  self.listButton:SetText(self.plan and self.plan.priceDiscovery and "Create scan list" or "Create list")
+  self.searchButton:SetText(self.plan and self.plan.priceDiscovery and "Scan prices at Auction House" or "Search at Auction House")
   self.listButton:SetEnabled(self.plan ~= nil)
   self.searchButton:SetEnabled(self.plan ~= nil)
   if self.plan and self.plan.priceDiscovery then
     self.planError:SetTextColor(1, 0.82, 0.2)
     self.planError:SetText(string.format(
-      "%d auction prices are missing. Continue in Shopping list.",
+      "%d auction prices are missing. Use Search at Auction House on the right.",
       self.plan.missingPriceCount
     ))
   else
-    self.planError:SetTextColor(1, 0.35, 0.25)
-    self.planError:SetText(self.plan and "" or (self.planMessage or ""))
+    local skipped = self.plan and self.plan.skippedMissingPriceCount or 0
+    if skipped > 0 then
+      self.planError:SetTextColor(1, 0.82, 0.2)
+      self.planError:SetText(string.format(
+        "Route calculated; %d optional material price%s missing. Refresh range prices for a complete comparison.",
+        skipped, skipped == 1 and " is" or "s are"
+      ))
+    else
+      self.planError:SetTextColor(1, 0.35, 0.25)
+      self.planError:SetText(self.plan and "" or (self.planMessage or ""))
+    end
   end
   self:UpdatePriceFreshness()
 end
@@ -810,28 +987,29 @@ function SPP.UI:UpdatePriceFreshness()
   self.refreshPricesButton:SetEnabled(true)
   if stale then
     self.planError:SetTextColor(1, 0.82, 0.2)
-    self.planError:SetText((message or "Auction prices are stale.") .. " Refresh at the Auction House, then calculate again.")
-    if self.shoppingStatus and self.mode == "shopping" then
+    self.planError:SetText((message or "Auction prices are stale.") .. " Refresh at the Auction House; the route will recalculate after the scan.")
+    if self.shoppingStatus then
       self.shoppingStatus:SetTextColor(1, 0.82, 0.2)
-      self.shoppingStatus:SetText((message or "Auction prices are stale.") .. " Refresh prices, then calculate again.")
+      self.shoppingStatus:SetText((message or "Auction prices are stale.") .. " Refresh prices to update the route.")
     end
   end
 end
 
 function SPP.UI:OnAuctionPricesUpdated(count)
   if not self.frame then return end
+  self:BuildPlan()
+  local message = string.format("Updated quantity pricing for %d auction items and recalculated the route.", count or 0)
   self.planError:SetTextColor(0.45, 1, 0.45)
-  self.planError:SetText(string.format("Captured quantity pricing for %d materials. Click Calculate again.", count or 0))
-  if self.shoppingStatus then
-    self.shoppingStatus:SetTextColor(0.45, 1, 0.45)
-    self.shoppingStatus:SetText(string.format("Quantity pricing updated for %d materials. Recalculate the route.", count or 0))
-  end
+  self.planError:SetText(message)
+  self.shoppingStatus:SetTextColor(0.45, 1, 0.45)
+  self.shoppingStatus:SetText(message)
 end
 
 function SPP.UI:UpdateShoppingRows()
   self.shoppingRowsData = SPP.Auctionator:GetShoppingRows(self.plan)
-  self.shoppingOffset = math.min(self.shoppingOffset or 0, math.max(0, #self.shoppingRowsData - 12))
-  local estimatedTotal = 0
+  local auctionRows = SPP.Auctionator:GetShoppingRows(self.plan, true)
+  self.shoppingOffset = math.min(self.shoppingOffset or 0, math.max(0, #self.shoppingRowsData - VISIBLE_SHOPPING_ROWS))
+  local estimatedTotal, vendorCount = 0, 0
   for index, row in ipairs(self.shoppingRows or {}) do
     local material = self.shoppingRowsData[self.shoppingOffset + index]
     if not material then
@@ -841,13 +1019,15 @@ function SPP.UI:UpdateShoppingRows()
       row.icon:SetTexture(itemTexture(material.itemId))
       row.name:SetText(material.name)
       row.quantity:SetText("x" .. material.quantity)
-      row.cost:SetText(unitPrice and SPP:FormatMoney(unitPrice * material.quantity) or "Price needed")
+      row.cost:SetText((unitPrice and SPP:FormatMoney(unitPrice * material.quantity) or "Price needed")
+        .. (material.vendor and "  |cff75c94fVendor|r" or ""))
       row:Show()
     end
   end
   for _, material in ipairs(self.shoppingRowsData) do
     local unitPrice = SPP.Price:GetUnitPrice(material.itemId)
     if unitPrice then estimatedTotal = estimatedTotal + unitPrice * material.quantity end
+    if material.vendor then vendorCount = vendorCount + 1 end
   end
   if not self.plan then
     self.shoppingTotal:SetText("")
@@ -856,16 +1036,27 @@ function SPP.UI:UpdateShoppingRows()
   elseif self.plan.priceDiscovery then
     self.shoppingTotal:SetText(string.format("%d prices needed", self.plan.missingPriceCount or #self.shoppingRowsData))
     self.shoppingStatus:SetTextColor(1, 0.82, 0.2)
-    self.shoppingStatus:SetText("Open the Auction House, scan these materials, then return to Professions and calculate again.")
+    self.shoppingStatus:SetText("Open the Auction House and scan these items. Cole recalculates when the scan finishes.")
   else
-    self.shoppingTotal:SetText(string.format("%d materials  |  %s", #self.shoppingRowsData, SPP:FormatMoney(estimatedTotal)))
+    self.shoppingTotal:SetText(string.format(
+      "%d materials%s  |  %s",
+      #self.shoppingRowsData, vendorCount > 0 and (" (" .. vendorCount .. " vendor)") or "",
+      SPP:FormatMoney(estimatedTotal)
+    ))
     local opportunityCount = #(self.plan.recipeOpportunities or {})
-    self.shoppingStatus:SetText(opportunityCount > 0 and string.format("%d unknown recipe%s may reduce the route cost.", opportunityCount, opportunityCount == 1 and "" or "s") or "")
+    local notes = {}
+    if vendorCount > 0 then
+      table.insert(notes, string.format("Vendor supplies: %d (excluded from Auctionator).", vendorCount))
+    end
+    if opportunityCount > 0 then
+      table.insert(notes, string.format("Unknown cheaper recipes: %d.", opportunityCount))
+    end
+    self.shoppingStatus:SetText(table.concat(notes, "  "))
   end
-  self.listButton:SetText(self.plan and self.plan.priceDiscovery and "Create scan list" or "Create Auctionator list")
-  self.searchButton:SetText(self.plan and self.plan.priceDiscovery and "Scan prices" or "Search materials")
-  self.listButton:SetEnabled(self.plan ~= nil and #self.shoppingRowsData > 0)
-  self.searchButton:SetEnabled(self.plan ~= nil and #self.shoppingRowsData > 0)
+  self.listButton:SetText(self.plan and self.plan.priceDiscovery and "Create scan list" or "Create list")
+  self.searchButton:SetText(self.plan and self.plan.priceDiscovery and "Scan prices at Auction House" or "Search at Auction House")
+  self.listButton:SetEnabled(self.plan ~= nil and #auctionRows > 0)
+  self.searchButton:SetEnabled(self.plan ~= nil and #auctionRows > 0)
   local opportunityCount = self.plan and #(self.plan.recipeOpportunities or {}) or 0
   self.recipeSearchButton:SetShown(not (self.plan and self.plan.priceDiscovery))
   self.recipeSearchButton:SetEnabled(opportunityCount > 0)
@@ -886,13 +1077,11 @@ function SPP.UI:Refresh()
   self.provider:SetText(SPP.Price:GetProviderLabel())
   self:UpdateProfessionButton()
   self:UpdateMiningNote()
-  self.shoppingTab:SetEnabled(self.plan ~= nil)
   if self.mode == "browser" then
     self:UpdateBrowser()
-  elseif self.mode == "shopping" then
-    self:UpdateShoppingRows()
   else
     self:UpdatePlanRows()
+    self:UpdateShoppingRows()
   end
 end
 

@@ -5,7 +5,7 @@ SPP.R = {
   SPELL = 1, NAME = 2, EXPANSION = 3, PHASE = 4, PHASE_EXACT = 5,
   OUTPUT = 6, OUTPUT_QTY = 7, RECIPE_ITEM = 8, LEARN = 9,
   ORANGE = 10, YELLOW = 11, GREEN = 12, GRAY = 13,
-  SOURCE = 14, REAGENTS = 15, PROFESSION = 16
+  SOURCE = 14, REAGENTS = 15, PROFESSION = 16, MANDATORY = 17
 }
 
 SPP.S = {
@@ -183,6 +183,11 @@ end
 function SPP.Data:GetVendorPrice(itemId)
   local item = SPP_ITEM_DATA and SPP_ITEM_DATA[itemId]
   return item and item[2] or nil
+end
+
+function SPP.Data:IsVendorItem(itemId)
+  local price = self:GetVendorPrice(itemId)
+  return type(price) == "number" and price > 0
 end
 
 function SPP.Data:GetColor(recipe, skill)

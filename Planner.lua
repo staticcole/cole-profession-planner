@@ -1,7 +1,8 @@
 SPP.Planner = SPP.Planner or {}
 
-local LOOKAHEAD_POINTS = 5
-local STICKINESS = 1.08
+local BLOCK_SKILL_POINTS = 5
+local SWITCH_SAVINGS_THRESHOLD = 0.12
+local FAST_SWITCH_THRESHOLD = 0.05
 local REFRESH_QUANTITY_CAP = 500
 
 local function currentTime()
@@ -11,16 +12,34 @@ local function currentTime()
   return os and os.time and os.time() or 0
 end
 
-local function recipeCostWithStock(recipe, expectedCrafts, stock, options)
-  local trial = SPP.Inventory:Copy(stock)
+local function getRecipeCraftTime(recipe)
+  local spellId = recipe[SPP.R.SPELL]
+  local castTime
+  if C_Spell and C_Spell.GetSpellInfo then
+    local ok, info = pcall(C_Spell.GetSpellInfo, spellId)
+    if ok and type(info) == "table" then castTime = info.castTime end
+  end
+  if (not castTime or castTime <= 0) and GetSpellInfo then
+    local ok, _, _, _, legacyCastTime = pcall(GetSpellInfo, spellId)
+    if ok then castTime = legacyCastTime end
+  end
+  if type(castTime) == "number" and castTime > 0 then return castTime / 1000, false end
+  return 3, true
+end
+
+local function recipeCostWithStock(recipe, expectedCrafts, craftedStock, inventoryStock, options)
+  local craftedTrial = SPP.Inventory:Copy(craftedStock)
+  local inventoryTrial = SPP.Inventory:Copy(inventoryStock)
   local shopping = {}
   local reagents = recipe[SPP.R.REAGENTS]
   local total, usedInventory = 0, false
   for index = 1, #reagents, 2 do
     local itemId = reagents[index]
     local required = reagents[index + 1] * expectedCrafts
-    local remaining = SPP.Inventory:Consume(itemId, required, trial)
-    if remaining < required then usedInventory = true end
+    local remaining = SPP.Inventory:Consume(itemId, required, craftedTrial)
+    local afterInventory = SPP.Inventory:Consume(itemId, remaining, inventoryTrial)
+    if afterInventory < remaining then usedInventory = true end
+    remaining = afterInventory
     if remaining > 0 then
       local price = SPP.Price:GetEffectivePrice(itemId, options, {})
       if not price then return nil, itemId end
@@ -28,7 +47,7 @@ local function recipeCostWithStock(recipe, expectedCrafts, stock, options)
       SPP.Price:AddShoppingMaterials(itemId, remaining, options, shopping)
     end
   end
-  return total, nil, trial, shopping, usedInventory
+  return total, nil, craftedTrial, inventoryTrial, shopping, usedInventory
 end
 
 local function addRecipeOutput(recipe, expectedCrafts, stock)
@@ -38,25 +57,67 @@ local function addRecipeOutput(recipe, expectedCrafts, stock)
   end
 end
 
-local function getLookaheadScore(recipe, skill, targetSkill, stock, options)
-  local trial = SPP.Inventory:Copy(stock)
-  local total, covered = 0, 0
-  local lastSkill = math.min(targetSkill - 1, skill + LOOKAHEAD_POINTS - 1)
+local function mergeShopping(target, source)
+  for itemId, quantity in pairs(source or {}) do
+    target[itemId] = (target[itemId] or 0) + quantity
+  end
+end
+
+local function evaluateRecipeBlock(recipe, skill, targetSkill, craftedStock, inventoryStock, options)
+  local craftedTrial = SPP.Inventory:Copy(craftedStock)
+  local inventoryTrial = SPP.Inventory:Copy(inventoryStock)
+  local shopping = {}
+  local total, expectedCrafts, covered, usedInventory = 0, 0, 0, false
+  local lastSkill = math.min(targetSkill - 1, skill + BLOCK_SKILL_POINTS - 1)
   for futureSkill = skill, lastSkill do
     local chance = SPP.Data:GetSkillupChance(recipe, futureSkill)
     if chance <= 0 then break end
-    local expectedCrafts = 1 / chance
-    local expectedCost, _, nextStock = recipeCostWithStock(recipe, expectedCrafts, trial, options)
-    if not expectedCost then return nil end
+    local crafts = 1 / chance
+    local expectedCost, missingItem, nextCrafted, nextInventory, stepShopping, stepUsedInventory = recipeCostWithStock(
+      recipe, crafts, craftedTrial, inventoryTrial, options
+    )
+    if not expectedCost then return nil, missingItem end
     total = total + expectedCost
+    expectedCrafts = expectedCrafts + crafts
     covered = covered + 1
-    trial = nextStock
-    addRecipeOutput(recipe, expectedCrafts, trial)
+    craftedTrial = nextCrafted
+    inventoryTrial = nextInventory
+    mergeShopping(shopping, stepShopping)
+    usedInventory = usedInventory or stepUsedInventory
+    addRecipeOutput(recipe, crafts, craftedTrial)
   end
   if covered == 0 then return nil end
   local desired = lastSkill - skill + 1
   local shortRoutePenalty = 1 + ((desired - covered) * 0.02)
-  return (total / covered) * shortRoutePenalty, covered
+  return {
+    reagentCost = total,
+    expectedCrafts = expectedCrafts,
+    covered = covered,
+    score = (total / covered) * shortRoutePenalty,
+    craftedStock = craftedTrial,
+    inventoryStock = inventoryTrial,
+    shopping = shopping,
+    usedInventory = usedInventory
+  }
+end
+
+local function isBetterCandidate(candidate, current, routeMode)
+  if not current then return true end
+  if routeMode == "fast" and math.abs(candidate.fastScore - current.fastScore) > 0.001 then
+    return candidate.fastScore < current.fastScore
+  end
+  return candidate.score < current.score
+end
+
+local function shouldSwitchRecipe(previous, best, routeMode)
+  if routeMode == "fast" then
+    local speedSavings = previous.fastScore > 0 and ((previous.fastScore - best.fastScore) / previous.fastScore) or 0
+    if speedSavings >= FAST_SWITCH_THRESHOLD then return true end
+    local costSavings = previous.score > 0 and ((previous.score - best.score) / previous.score) or 0
+    return math.abs(speedSavings) < 0.01 and costSavings >= SWITCH_SAVINGS_THRESHOLD
+  end
+  local savings = previous.score > 0 and ((previous.score - best.score) / previous.score) or 0
+  return savings >= SWITCH_SAVINGS_THRESHOLD
 end
 
 local function isRecipeKnown(recipe, options)
@@ -72,7 +133,47 @@ local function shouldEvaluateRecipe(recipe, options)
     or options.includeRareRecipes
 end
 
+local function getCompletedMandatoryRank(recipes, craftedStock, inventoryStock)
+  local completedRank = 0
+  for _, recipe in ipairs(recipes) do
+    local rank = recipe[SPP.R.MANDATORY]
+    local output = recipe[SPP.R.OUTPUT]
+    if rank and output and ((craftedStock[output] or 0) + (inventoryStock[output] or 0)) >= 1 then
+      completedRank = math.max(completedRank, rank)
+    end
+  end
+  return completedRank
+end
+
+local function getMandatoryProgression(recipes, skill, targetSkill, craftedStock, inventoryStock, options)
+  local completedRank = getCompletedMandatoryRank(recipes, craftedStock, inventoryStock)
+  local dueRecipe, nextSkill
+  for _, recipe in ipairs(recipes) do
+    local rank = recipe[SPP.R.MANDATORY]
+    local learn = recipe[SPP.R.LEARN]
+    if rank and rank > completedRank and learn < targetSkill
+      and SPP.Data:IsAvailable(
+        recipe[SPP.R.EXPANSION], recipe[SPP.R.PHASE], options.maxExpansion or 2, options.maxPhase or 9
+      ) then
+      if learn <= skill then
+        if not dueRecipe or rank < dueRecipe[SPP.R.MANDATORY] then dueRecipe = recipe end
+      elseif not nextSkill or learn < nextSkill then
+        nextSkill = learn
+      end
+    end
+  end
+  return dueRecipe, nextSkill
+end
+
+local function recipeOverlapsSkillRange(recipe, startSkill, targetSkill)
+  local firstSkill = math.max(startSkill, recipe[SPP.R.LEARN])
+  local lastSkillExclusive = math.min(targetSkill, recipe[SPP.R.GRAY])
+  return firstSkill < lastSkillExclusive, firstSkill, lastSkillExclusive
+end
+
 local function addRefreshMaterial(shopping, itemId, quantity, options, visiting)
+  quantity = math.max(0, quantity - ((options.inventory and options.inventory[itemId]) or 0))
+  if quantity <= 0 then return end
   quantity = math.min(quantity, options.refreshQuantityCap or REFRESH_QUANTITY_CAP)
   shopping[itemId] = math.max(shopping[itemId] or 0, quantity)
   if visiting[itemId] then return end
@@ -114,8 +215,11 @@ local function getRecipeAccess(recipe, options, acquiredRecipes)
   local recipeItem = recipe[SPP.R.RECIPE_ITEM]
   if not recipeItem then return false end
   if acquiredRecipes[spellId] then return true end
-  local price = SPP.Price:GetAuctionPrice(recipeItem)
-  if price then return true, recipeItem, price end
+  local available, price
+  if SPP.Auctionator and SPP.Auctionator.IsItemCurrentlyAvailable then
+    available, price = SPP.Auctionator:IsItemCurrentlyAvailable(recipeItem)
+  end
+  if available and price then return true, recipeItem, price end
   return false, recipeItem
 end
 
@@ -123,16 +227,29 @@ function SPP.Planner:BuildRefreshShopping(profession, startSkill, targetSkill, o
   options = options or {}
   options.refreshQuantityCap = options.refreshQuantityCap or REFRESH_QUANTITY_CAP
   local shopping = {}
-  for _, recipe in ipairs(SPP.Data.professions[profession] or {}) do
-    if SPP.Data:IsAvailable(
+  local recipes = SPP.Data.professions[profession] or {}
+  local completedMandatoryRank = getCompletedMandatoryRank(recipes, {}, options.inventory or {})
+  for _, recipe in ipairs(recipes) do
+    local overlaps, firstSkill, lastSkillExclusive = recipeOverlapsSkillRange(recipe, startSkill, targetSkill)
+    local mandatoryRank = recipe[SPP.R.MANDATORY]
+    local mandatory = mandatoryRank and mandatoryRank > completedMandatoryRank
+      and recipe[SPP.R.LEARN] < targetSkill
+    local eligible = mandatory or (not mandatoryRank and overlaps)
+    if eligible and SPP.Data:IsAvailable(
       recipe[SPP.R.EXPANSION], recipe[SPP.R.PHASE], options.maxExpansion or 2, options.maxPhase or 9
     ) and shouldEvaluateRecipe(recipe, options) then
-      local firstSkill = math.max(startSkill, recipe[SPP.R.LEARN])
-      local lastSkill = math.min(targetSkill - 1, recipe[SPP.R.GRAY] - 1)
-      local expectedCrafts = 0
-      for skill = firstSkill, lastSkill do
-        local chance = SPP.Data:GetSkillupChance(recipe, skill)
-        if chance > 0 then expectedCrafts = expectedCrafts + (1 / chance) end
+      if options.includeRareRecipes
+        and not isRecipeKnown(recipe, options)
+        and not SPP.Data:IsCommonRecipe(recipe, options.maxExpansion or 2, options.maxPhase or 9)
+        and recipe[SPP.R.RECIPE_ITEM] then
+        shopping[recipe[SPP.R.RECIPE_ITEM]] = math.max(shopping[recipe[SPP.R.RECIPE_ITEM]] or 0, 1)
+      end
+      local expectedCrafts = mandatory and 1 or 0
+      if not mandatory then
+        for skill = firstSkill, lastSkillExclusive - 1 do
+          local chance = SPP.Data:GetSkillupChance(recipe, skill)
+          if chance > 0 then expectedCrafts = expectedCrafts + (1 / chance) end
+        end
       end
       if expectedCrafts > 0 then
         local reagents = recipe[SPP.R.REAGENTS]
@@ -151,11 +268,10 @@ function SPP.Planner:GetRefreshQuantityCap()
   return REFRESH_QUANTITY_CAP
 end
 
-function SPP.Planner:BuildPriceScan(profession, startSkill, targetSkill, options)
+local function buildPriceScan(profession, startSkill, targetSkill, options, refreshShopping, requiredItems)
   local shopping, count = {}, 0
-  local refreshShopping = self:BuildRefreshShopping(profession, startSkill, targetSkill, options)
   for itemId, quantity in pairs(refreshShopping) do
-    if not SPP.Price:GetUnitPrice(itemId) then
+    if (not requiredItems or requiredItems[itemId]) and not SPP.Price:GetUnitPrice(itemId) then
       shopping[itemId] = math.ceil(quantity)
       count = count + 1
     end
@@ -163,13 +279,22 @@ function SPP.Planner:BuildPriceScan(profession, startSkill, targetSkill, options
   if count == 0 then return nil end
   return {
     profession = profession, fromSkill = startSkill, toSkill = targetSkill,
+    maxExpansion = options.maxExpansion or 2, maxPhase = options.maxPhase or 9,
+    routeMode = options.routeMode or "economy",
     totalCost = nil, steps = {}, shopping = shopping, usedInventory = options.inventory ~= nil,
     refreshShopping = refreshShopping, priceDiscovery = true, missingPriceCount = count
   }
 end
 
+function SPP.Planner:BuildPriceScan(profession, startSkill, targetSkill, options)
+  options = options or {}
+  local refreshShopping = self:BuildRefreshShopping(profession, startSkill, targetSkill, options)
+  return buildPriceScan(profession, startSkill, targetSkill, options, refreshShopping)
+end
+
 function SPP.Planner:Build(profession, startSkill, targetSkill, options)
   options = options or {}
+  local routeMode = options.routeMode == "fast" and "fast" or "economy"
   local recipes = SPP.Data.professions[profession]
   if not recipes then return nil, "Unknown profession" end
   local maxSkill = (options.maxExpansion or 2) == 1 and 300 or 375
@@ -177,125 +302,210 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
 
   SPP.Price:ClearCache()
   local refreshShopping = self:BuildRefreshShopping(profession, startSkill, targetSkill, options)
-  local priceScan = self:BuildPriceScan(profession, startSkill, targetSkill, options)
-  if priceScan then
-    return nil, string.format("Prices are missing for %d route materials", priceScan.missingPriceCount), priceScan
-  end
   local steps, total, shopping = {}, 0, {}
-  local missingItems = {}
-  local stock = SPP.Inventory:Copy(options.inventory)
+  local skippedMissingItems = {}
+  local craftedStock = {}
+  local inventoryStock = SPP.Inventory:Copy(options.inventory)
   local previousRecipe, inventoryApplied = nil, false
-  local acquiredRecipes, opportunityMap = {}, {}
-  for skill = startSkill, targetSkill - 1 do
-    local candidates, best, rareCandidates
+  local acquiredRecipes, opportunityMap, retiredRecipes = {}, {}, {}
+  local skill = startSkill
+  while skill < targetSkill do
+    local mandatoryRecipe, nextMandatorySkill = getMandatoryProgression(
+      recipes, skill, targetSkill, craftedStock, inventoryStock, options
+    )
+    if mandatoryRecipe then
+      local allowed, acquisitionItem, acquisitionCost = getRecipeAccess(mandatoryRecipe, options, acquiredRecipes)
+      if not allowed then
+        local recipeItem = mandatoryRecipe[SPP.R.RECIPE_ITEM]
+        return nil, "Required progression recipe is unavailable: " .. mandatoryRecipe[SPP.R.NAME],
+          recipeItem and buildPriceScan(
+            profession, startSkill, targetSkill, options, refreshShopping, { [recipeItem] = true }
+          ) or nil
+      end
+      local reagentCost, missingItem, nextCrafted, nextInventory, stepShopping, stepUsedInventory = recipeCostWithStock(
+        mandatoryRecipe, 1, craftedStock, inventoryStock, options
+      )
+      if not reagentCost then
+        return nil, "Missing price for required progression material: " .. SPP.Data:GetItemName(missingItem),
+          buildPriceScan(profession, startSkill, targetSkill, options, refreshShopping, { [missingItem] = true })
+      end
+      craftedStock = nextCrafted
+      inventoryStock = nextInventory
+      addRecipeOutput(mandatoryRecipe, 1, craftedStock)
+      local stepMaterials = {}
+      mergeShopping(stepMaterials, stepShopping)
+      mergeShopping(shopping, stepShopping)
+      if acquisitionItem then
+        shopping[acquisitionItem] = (shopping[acquisitionItem] or 0) + 1
+        stepMaterials[acquisitionItem] = (stepMaterials[acquisitionItem] or 0) + 1
+        acquiredRecipes[mandatoryRecipe[SPP.R.SPELL]] = true
+      end
+      local craftSeconds, craftTimeEstimated = getRecipeCraftTime(mandatoryRecipe)
+      local stepEnd = math.min(targetSkill, skill + 1)
+      table.insert(steps, {
+        recipe = mandatoryRecipe,
+        fromSkill = skill,
+        toSkill = stepEnd,
+        expectedCrafts = 1,
+        unitCost = reagentCost,
+        cost = reagentCost + (acquisitionCost or 0),
+        materials = stepMaterials,
+        craftSeconds = craftSeconds,
+        craftTimeEstimated = craftTimeEstimated,
+        usedInventory = stepUsedInventory,
+        acquisitionItem = acquisitionItem,
+        mandatory = true
+      })
+      total = total + reagentCost + (acquisitionCost or 0)
+      inventoryApplied = inventoryApplied or stepUsedInventory
+      previousRecipe = nil
+      skill = stepEnd
+    else
+    local candidates, best, bestRetired, rareCandidates, missingItems = nil, nil, nil, nil, {}
+    local blockTargetSkill = nextMandatorySkill and math.min(targetSkill, nextMandatorySkill) or targetSkill
     for _, recipe in ipairs(recipes) do
       if SPP.Data:IsAvailable(recipe[SPP.R.EXPANSION], recipe[SPP.R.PHASE], options.maxExpansion or 2, options.maxPhase or 9)
-        and recipe[SPP.R.LEARN] <= skill then
-        local chance = SPP.Data:GetSkillupChance(recipe, skill)
-        if chance > 0 then
-          local expectedCrafts = 1 / chance
-          local expectedCost, missingItem, trialStock, trialShopping, usedInventory = recipeCostWithStock(recipe, expectedCrafts, stock, options)
-          if expectedCost then
+        and not recipe[SPP.R.MANDATORY] and recipe[SPP.R.LEARN] <= skill then
+        local block, missingItem = evaluateRecipeBlock(
+          recipe, skill, blockTargetSkill, craftedStock, inventoryStock, options
+        )
+        if block then
             local allowed, acquisitionItem, acquisitionCost = getRecipeAccess(recipe, options, acquiredRecipes)
             if allowed then
-              local lookahead, covered = getLookaheadScore(recipe, skill, targetSkill, stock, options)
-              local totalExpectedCost = expectedCost + (acquisitionCost or 0)
+              local totalExpectedCost = block.reagentCost + (acquisitionCost or 0)
+              local craftSecondsPerCast = getRecipeCraftTime(recipe)
               local candidate = {
-                recipe = recipe, expectedCost = totalExpectedCost, reagentCost = expectedCost,
-                craftCost = expectedCost / expectedCrafts, chance = chance,
-                stock = trialStock, shopping = trialShopping, usedInventory = usedInventory,
+                recipe = recipe, expectedCost = totalExpectedCost, reagentCost = block.reagentCost,
+                expectedCrafts = block.expectedCrafts, covered = block.covered,
+                craftCost = block.reagentCost / block.expectedCrafts,
+                craftedStock = block.craftedStock, inventoryStock = block.inventoryStock,
+                shopping = block.shopping, usedInventory = block.usedInventory,
                 acquisitionItem = acquisitionItem, acquisitionCost = acquisitionCost,
-                score = (lookahead or expectedCost) + ((acquisitionCost or 0) / (covered or 1))
+                score = block.score + ((acquisitionCost or 0) / block.covered),
+                fastScore = (block.expectedCrafts * craftSecondsPerCast) / block.covered
               }
               candidates = candidates or {}
               table.insert(candidates, candidate)
-              if not best or candidate.score < best.score then best = candidate end
+              if retiredRecipes[recipe] then
+                if isBetterCandidate(candidate, bestRetired, routeMode) then bestRetired = candidate end
+              elseif isBetterCandidate(candidate, best, routeMode) then
+                best = candidate
+              end
             elseif acquisitionItem and options.includeRareRecipes then
               rareCandidates = rareCandidates or {}
               table.insert(rareCandidates, {
-                recipe = recipe, itemId = acquisitionItem, expectedCost = expectedCost
+                recipe = recipe, itemId = acquisitionItem, expectedCost = block.reagentCost,
+                score = block.score, covered = block.covered
               })
             end
-          elseif missingItem then
-            missingItems[missingItem] = true
-          end
+        elseif missingItem then
+          missingItems[missingItem] = true
+          skippedMissingItems[missingItem] = true
         end
       end
     end
+    best = best or bestRetired
     if not best then
       local missing = {}
       for itemId in pairs(missingItems) do table.insert(missing, SPP.Data:GetItemName(itemId)) end
       table.sort(missing)
-      return nil, #missing > 0 and ("Missing prices: " .. table.concat(missing, ", ")) or ("No usable recipe at skill " .. skill)
+      local priceScan = buildPriceScan(
+        profession, startSkill, targetSkill, options, refreshShopping, missingItems
+      )
+      local message = #missing > 0 and ("Missing prices at skill " .. skill .. ": " .. table.concat(missing, ", "))
+        or ("No usable recipe at skill " .. skill)
+      return nil, message, priceScan
     end
 
-    if previousRecipe then
+    if previousRecipe and best.recipe ~= previousRecipe then
       for _, candidate in ipairs(candidates or {}) do
-        if candidate.recipe == previousRecipe and candidate.score <= best.score * STICKINESS then
-          best = candidate
+        if candidate.recipe == previousRecipe then
+          if not shouldSwitchRecipe(candidate, best, routeMode) then best = candidate end
           break
         end
       end
     end
 
     for _, opportunity in ipairs(rareCandidates or {}) do
-      local savings = best.expectedCost - opportunity.expectedCost
+      local comparablePoints = math.min(best.covered, opportunity.covered)
+      local savings = (best.score - opportunity.score) * comparablePoints
       if savings > 0 then
         local entry = opportunityMap[opportunity.itemId]
         if not entry then
           entry = {
             itemId = opportunity.itemId, recipe = opportunity.recipe,
-            fromSkill = skill, toSkill = skill + 1, estimatedSavings = 0
+            fromSkill = skill, toSkill = skill + comparablePoints, estimatedSavings = 0
           }
           opportunityMap[opportunity.itemId] = entry
         end
         entry.fromSkill = math.min(entry.fromSkill, skill)
-        entry.toSkill = math.max(entry.toSkill, skill + 1)
+        entry.toSkill = math.max(entry.toSkill, skill + comparablePoints)
         entry.estimatedSavings = entry.estimatedSavings + savings
       end
     end
 
-    local expectedCrafts = 1 / best.chance
-    stock = best.stock
+    if previousRecipe and best.recipe ~= previousRecipe then retiredRecipes[previousRecipe] = true end
+    craftedStock = best.craftedStock
+    inventoryStock = best.inventoryStock
+    local stepMaterials = {}
+    mergeShopping(stepMaterials, best.shopping)
     for itemId, quantity in pairs(best.shopping or {}) do shopping[itemId] = (shopping[itemId] or 0) + quantity end
     if best.acquisitionItem then
       shopping[best.acquisitionItem] = (shopping[best.acquisitionItem] or 0) + 1
+      stepMaterials[best.acquisitionItem] = (stepMaterials[best.acquisitionItem] or 0) + 1
       acquiredRecipes[best.recipe[SPP.R.SPELL]] = true
     end
-    addRecipeOutput(best.recipe, expectedCrafts, stock)
     inventoryApplied = inventoryApplied or best.usedInventory
+    local blockEnd = skill + best.covered
+    local craftSecondsPerCast, craftTimeEstimated = getRecipeCraftTime(best.recipe)
+    local blockCraftSeconds = craftSecondsPerCast * best.expectedCrafts
     local previous = steps[#steps]
     if previous and previous.recipe == best.recipe then
-      previous.toSkill = skill + 1
-      previous.expectedCrafts = previous.expectedCrafts + expectedCrafts
+      previous.toSkill = blockEnd
+      previous.expectedCrafts = previous.expectedCrafts + best.expectedCrafts
       previous.cost = previous.cost + best.expectedCost
+      previous.craftSeconds = previous.craftSeconds + blockCraftSeconds
+      previous.craftTimeEstimated = previous.craftTimeEstimated or craftTimeEstimated
+      mergeShopping(previous.materials, stepMaterials)
       previous.usedInventory = previous.usedInventory or best.usedInventory
       previous.acquisitionItem = previous.acquisitionItem or best.acquisitionItem
     else
       table.insert(steps, {
         recipe = best.recipe,
         fromSkill = skill,
-        toSkill = skill + 1,
-        expectedCrafts = expectedCrafts,
+        toSkill = blockEnd,
+        expectedCrafts = best.expectedCrafts,
         unitCost = best.craftCost,
         cost = best.expectedCost,
+        materials = stepMaterials,
+        craftSeconds = blockCraftSeconds,
+        craftTimeEstimated = craftTimeEstimated,
         usedInventory = best.usedInventory,
         acquisitionItem = best.acquisitionItem
       })
     end
     total = total + best.expectedCost
     previousRecipe = best.recipe
+    skill = blockEnd
+    end
   end
   local recipeOpportunities = {}
   for _, opportunity in pairs(opportunityMap) do table.insert(recipeOpportunities, opportunity) end
   table.sort(recipeOpportunities, function(a, b) return a.estimatedSavings > b.estimatedSavings end)
+  local skippedMissingPriceCount = 0
+  for _ in pairs(skippedMissingItems) do skippedMissingPriceCount = skippedMissingPriceCount + 1 end
   return {
     profession = profession, fromSkill = startSkill, toSkill = targetSkill,
+    maxExpansion = options.maxExpansion or 2, maxPhase = options.maxPhase or 9,
+    routeMode = routeMode,
     totalCost = total, steps = steps, shopping = shopping, usedInventory = inventoryApplied,
     refreshShopping = refreshShopping,
     recipeOpportunities = recipeOpportunities,
+    skippedMissingPriceCount = skippedMissingPriceCount,
     calculatedAt = currentTime(),
-    selection = string.format("%d-point lookahead, %d%% switch threshold", LOOKAHEAD_POINTS, math.floor((STICKINESS - 1) * 100 + 0.5))
+    selection = routeMode == "fast"
+      and string.format("Fast: %d-point blocks, %d%% faster to switch", BLOCK_SKILL_POINTS, math.floor(FAST_SWITCH_THRESHOLD * 100 + 0.5))
+      or string.format("Economy: %d-point blocks, %d%% minimum savings to switch", BLOCK_SKILL_POINTS, math.floor(SWITCH_SAVINGS_THRESHOLD * 100 + 0.5))
   }
 end
 
