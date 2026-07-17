@@ -1,6 +1,51 @@
 COLE PROFESSION PLANNER CHANGELOG
 =================================
 
+0.9.11-tbc
+----------
+
+- Corrected TBC First Aid manual sources for Heavy Silk, Mageweave and Netherweave bandages.
+- Removed WotLK-only trainer acquisitions from the TBC Anniversary recipe database.
+- Limited Heavy Mageweave and Runecloth bandage training to the faction trauma surgeons used after Triage.
+
+0.9.10-tbc
+----------
+
+- Registered the minimap launcher through LibDataBroker and LibDBIcon when available.
+- Made the icon participate in SexyMap fading and standard minimap-button management.
+- Preserved the lightweight custom button as a fallback when shared libraries are unavailable.
+
+0.9.9-tbc
+---------
+
+- Added Fast route mode for high skill-up chance and Economy mode for lowest expected material cost.
+- Required a fresh Auctionator result with an available listing before using an unknown auction recipe.
+- Recorded zero-result Auctionator searches so stale recipe prices cannot re-enter a route.
+- Rebuilt the planner as a three-column workbench with settings, route and shopping list visible together.
+- Recalculated the route automatically when an Auctionator quantity scan finishes.
+
+0.9.8-tbc
+---------
+
+- Prevented profession routes from returning to an already retired recipe when a new usable option exists.
+- Required reliable quantity prices and at least 15% savings before upgrading full leather tiers for shopping.
+- Added per-route-step shopping materials after bag and intermediate-output allocation.
+- Added per-step crafting time using client cast times with a marked fallback estimate.
+
+0.9.7-tbc
+---------
+
+- Planned profession routes in five-skill blocks instead of committing one point at a time.
+- Required at least 12% estimated savings before switching away from the current recipe.
+
+0.9.6-tbc
+---------
+
+- Limited price refreshes to recipes usable inside the selected skill range.
+- Prevented missing prices for optional recipes from blocking Leatherworking routes.
+- Excluded fixed-price profession vendor supplies from Auctionator searches and marked them in shopping lists.
+- Added automatic version bumps and protected existing release archives from being overwritten.
+
 0.9.5-tbc
 ---------
 
