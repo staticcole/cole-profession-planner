@@ -27,16 +27,19 @@ local function getRecipeCraftTime(recipe)
   return 3, true
 end
 
-local function recipeCostWithStock(recipe, expectedCrafts, stock, options)
-  local trial = SPP.Inventory:Copy(stock)
+local function recipeCostWithStock(recipe, expectedCrafts, craftedStock, inventoryStock, options)
+  local craftedTrial = SPP.Inventory:Copy(craftedStock)
+  local inventoryTrial = SPP.Inventory:Copy(inventoryStock)
   local shopping = {}
   local reagents = recipe[SPP.R.REAGENTS]
   local total, usedInventory = 0, false
   for index = 1, #reagents, 2 do
     local itemId = reagents[index]
     local required = reagents[index + 1] * expectedCrafts
-    local remaining = SPP.Inventory:Consume(itemId, required, trial)
-    if remaining < required then usedInventory = true end
+    local remaining = SPP.Inventory:Consume(itemId, required, craftedTrial)
+    local afterInventory = SPP.Inventory:Consume(itemId, remaining, inventoryTrial)
+    if afterInventory < remaining then usedInventory = true end
+    remaining = afterInventory
     if remaining > 0 then
       local price = SPP.Price:GetEffectivePrice(itemId, options, {})
       if not price then return nil, itemId end
@@ -44,7 +47,7 @@ local function recipeCostWithStock(recipe, expectedCrafts, stock, options)
       SPP.Price:AddShoppingMaterials(itemId, remaining, options, shopping)
     end
   end
-  return total, nil, trial, shopping, usedInventory
+  return total, nil, craftedTrial, inventoryTrial, shopping, usedInventory
 end
 
 local function addRecipeOutput(recipe, expectedCrafts, stock)
@@ -60,8 +63,9 @@ local function mergeShopping(target, source)
   end
 end
 
-local function evaluateRecipeBlock(recipe, skill, targetSkill, stock, options)
-  local trial = SPP.Inventory:Copy(stock)
+local function evaluateRecipeBlock(recipe, skill, targetSkill, craftedStock, inventoryStock, options)
+  local craftedTrial = SPP.Inventory:Copy(craftedStock)
+  local inventoryTrial = SPP.Inventory:Copy(inventoryStock)
   local shopping = {}
   local total, expectedCrafts, covered, usedInventory = 0, 0, 0, false
   local lastSkill = math.min(targetSkill - 1, skill + BLOCK_SKILL_POINTS - 1)
@@ -69,17 +73,18 @@ local function evaluateRecipeBlock(recipe, skill, targetSkill, stock, options)
     local chance = SPP.Data:GetSkillupChance(recipe, futureSkill)
     if chance <= 0 then break end
     local crafts = 1 / chance
-    local expectedCost, missingItem, nextStock, stepShopping, stepUsedInventory = recipeCostWithStock(
-      recipe, crafts, trial, options
+    local expectedCost, missingItem, nextCrafted, nextInventory, stepShopping, stepUsedInventory = recipeCostWithStock(
+      recipe, crafts, craftedTrial, inventoryTrial, options
     )
     if not expectedCost then return nil, missingItem end
     total = total + expectedCost
     expectedCrafts = expectedCrafts + crafts
     covered = covered + 1
-    trial = nextStock
+    craftedTrial = nextCrafted
+    inventoryTrial = nextInventory
     mergeShopping(shopping, stepShopping)
     usedInventory = usedInventory or stepUsedInventory
-    addRecipeOutput(recipe, crafts, trial)
+    addRecipeOutput(recipe, crafts, craftedTrial)
   end
   if covered == 0 then return nil end
   local desired = lastSkill - skill + 1
@@ -89,7 +94,8 @@ local function evaluateRecipeBlock(recipe, skill, targetSkill, stock, options)
     expectedCrafts = expectedCrafts,
     covered = covered,
     score = (total / covered) * shortRoutePenalty,
-    stock = trial,
+    craftedStock = craftedTrial,
+    inventoryStock = inventoryTrial,
     shopping = shopping,
     usedInventory = usedInventory
   }
@@ -127,6 +133,38 @@ local function shouldEvaluateRecipe(recipe, options)
     or options.includeRareRecipes
 end
 
+local function getCompletedMandatoryRank(recipes, craftedStock, inventoryStock)
+  local completedRank = 0
+  for _, recipe in ipairs(recipes) do
+    local rank = recipe[SPP.R.MANDATORY]
+    local output = recipe[SPP.R.OUTPUT]
+    if rank and output and ((craftedStock[output] or 0) + (inventoryStock[output] or 0)) >= 1 then
+      completedRank = math.max(completedRank, rank)
+    end
+  end
+  return completedRank
+end
+
+local function getMandatoryProgression(recipes, skill, targetSkill, craftedStock, inventoryStock, options)
+  local completedRank = getCompletedMandatoryRank(recipes, craftedStock, inventoryStock)
+  local dueRecipe, nextSkill
+  for _, recipe in ipairs(recipes) do
+    local rank = recipe[SPP.R.MANDATORY]
+    local learn = recipe[SPP.R.LEARN]
+    if rank and rank > completedRank and learn < targetSkill
+      and SPP.Data:IsAvailable(
+        recipe[SPP.R.EXPANSION], recipe[SPP.R.PHASE], options.maxExpansion or 2, options.maxPhase or 9
+      ) then
+      if learn <= skill then
+        if not dueRecipe or rank < dueRecipe[SPP.R.MANDATORY] then dueRecipe = recipe end
+      elseif not nextSkill or learn < nextSkill then
+        nextSkill = learn
+      end
+    end
+  end
+  return dueRecipe, nextSkill
+end
+
 local function recipeOverlapsSkillRange(recipe, startSkill, targetSkill)
   local firstSkill = math.max(startSkill, recipe[SPP.R.LEARN])
   local lastSkillExclusive = math.min(targetSkill, recipe[SPP.R.GRAY])
@@ -134,6 +172,8 @@ local function recipeOverlapsSkillRange(recipe, startSkill, targetSkill)
 end
 
 local function addRefreshMaterial(shopping, itemId, quantity, options, visiting)
+  quantity = math.max(0, quantity - ((options.inventory and options.inventory[itemId]) or 0))
+  if quantity <= 0 then return end
   quantity = math.min(quantity, options.refreshQuantityCap or REFRESH_QUANTITY_CAP)
   shopping[itemId] = math.max(shopping[itemId] or 0, quantity)
   if visiting[itemId] then return end
@@ -187,9 +227,15 @@ function SPP.Planner:BuildRefreshShopping(profession, startSkill, targetSkill, o
   options = options or {}
   options.refreshQuantityCap = options.refreshQuantityCap or REFRESH_QUANTITY_CAP
   local shopping = {}
-  for _, recipe in ipairs(SPP.Data.professions[profession] or {}) do
+  local recipes = SPP.Data.professions[profession] or {}
+  local completedMandatoryRank = getCompletedMandatoryRank(recipes, {}, options.inventory or {})
+  for _, recipe in ipairs(recipes) do
     local overlaps, firstSkill, lastSkillExclusive = recipeOverlapsSkillRange(recipe, startSkill, targetSkill)
-    if overlaps and SPP.Data:IsAvailable(
+    local mandatoryRank = recipe[SPP.R.MANDATORY]
+    local mandatory = mandatoryRank and mandatoryRank > completedMandatoryRank
+      and recipe[SPP.R.LEARN] < targetSkill
+    local eligible = mandatory or (not mandatoryRank and overlaps)
+    if eligible and SPP.Data:IsAvailable(
       recipe[SPP.R.EXPANSION], recipe[SPP.R.PHASE], options.maxExpansion or 2, options.maxPhase or 9
     ) and shouldEvaluateRecipe(recipe, options) then
       if options.includeRareRecipes
@@ -198,10 +244,12 @@ function SPP.Planner:BuildRefreshShopping(profession, startSkill, targetSkill, o
         and recipe[SPP.R.RECIPE_ITEM] then
         shopping[recipe[SPP.R.RECIPE_ITEM]] = math.max(shopping[recipe[SPP.R.RECIPE_ITEM]] or 0, 1)
       end
-      local expectedCrafts = 0
-      for skill = firstSkill, lastSkillExclusive - 1 do
-        local chance = SPP.Data:GetSkillupChance(recipe, skill)
-        if chance > 0 then expectedCrafts = expectedCrafts + (1 / chance) end
+      local expectedCrafts = mandatory and 1 or 0
+      if not mandatory then
+        for skill = firstSkill, lastSkillExclusive - 1 do
+          local chance = SPP.Data:GetSkillupChance(recipe, skill)
+          if chance > 0 then expectedCrafts = expectedCrafts + (1 / chance) end
+        end
       end
       if expectedCrafts > 0 then
         local reagents = recipe[SPP.R.REAGENTS]
@@ -256,16 +304,71 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
   local refreshShopping = self:BuildRefreshShopping(profession, startSkill, targetSkill, options)
   local steps, total, shopping = {}, 0, {}
   local skippedMissingItems = {}
-  local stock = SPP.Inventory:Copy(options.inventory)
+  local craftedStock = {}
+  local inventoryStock = SPP.Inventory:Copy(options.inventory)
   local previousRecipe, inventoryApplied = nil, false
   local acquiredRecipes, opportunityMap, retiredRecipes = {}, {}, {}
   local skill = startSkill
   while skill < targetSkill do
+    local mandatoryRecipe, nextMandatorySkill = getMandatoryProgression(
+      recipes, skill, targetSkill, craftedStock, inventoryStock, options
+    )
+    if mandatoryRecipe then
+      local allowed, acquisitionItem, acquisitionCost = getRecipeAccess(mandatoryRecipe, options, acquiredRecipes)
+      if not allowed then
+        local recipeItem = mandatoryRecipe[SPP.R.RECIPE_ITEM]
+        return nil, "Required progression recipe is unavailable: " .. mandatoryRecipe[SPP.R.NAME],
+          recipeItem and buildPriceScan(
+            profession, startSkill, targetSkill, options, refreshShopping, { [recipeItem] = true }
+          ) or nil
+      end
+      local reagentCost, missingItem, nextCrafted, nextInventory, stepShopping, stepUsedInventory = recipeCostWithStock(
+        mandatoryRecipe, 1, craftedStock, inventoryStock, options
+      )
+      if not reagentCost then
+        return nil, "Missing price for required progression material: " .. SPP.Data:GetItemName(missingItem),
+          buildPriceScan(profession, startSkill, targetSkill, options, refreshShopping, { [missingItem] = true })
+      end
+      craftedStock = nextCrafted
+      inventoryStock = nextInventory
+      addRecipeOutput(mandatoryRecipe, 1, craftedStock)
+      local stepMaterials = {}
+      mergeShopping(stepMaterials, stepShopping)
+      mergeShopping(shopping, stepShopping)
+      if acquisitionItem then
+        shopping[acquisitionItem] = (shopping[acquisitionItem] or 0) + 1
+        stepMaterials[acquisitionItem] = (stepMaterials[acquisitionItem] or 0) + 1
+        acquiredRecipes[mandatoryRecipe[SPP.R.SPELL]] = true
+      end
+      local craftSeconds, craftTimeEstimated = getRecipeCraftTime(mandatoryRecipe)
+      local stepEnd = math.min(targetSkill, skill + 1)
+      table.insert(steps, {
+        recipe = mandatoryRecipe,
+        fromSkill = skill,
+        toSkill = stepEnd,
+        expectedCrafts = 1,
+        unitCost = reagentCost,
+        cost = reagentCost + (acquisitionCost or 0),
+        materials = stepMaterials,
+        craftSeconds = craftSeconds,
+        craftTimeEstimated = craftTimeEstimated,
+        usedInventory = stepUsedInventory,
+        acquisitionItem = acquisitionItem,
+        mandatory = true
+      })
+      total = total + reagentCost + (acquisitionCost or 0)
+      inventoryApplied = inventoryApplied or stepUsedInventory
+      previousRecipe = nil
+      skill = stepEnd
+    else
     local candidates, best, bestRetired, rareCandidates, missingItems = nil, nil, nil, nil, {}
+    local blockTargetSkill = nextMandatorySkill and math.min(targetSkill, nextMandatorySkill) or targetSkill
     for _, recipe in ipairs(recipes) do
       if SPP.Data:IsAvailable(recipe[SPP.R.EXPANSION], recipe[SPP.R.PHASE], options.maxExpansion or 2, options.maxPhase or 9)
-        and recipe[SPP.R.LEARN] <= skill then
-        local block, missingItem = evaluateRecipeBlock(recipe, skill, targetSkill, stock, options)
+        and not recipe[SPP.R.MANDATORY] and recipe[SPP.R.LEARN] <= skill then
+        local block, missingItem = evaluateRecipeBlock(
+          recipe, skill, blockTargetSkill, craftedStock, inventoryStock, options
+        )
         if block then
             local allowed, acquisitionItem, acquisitionCost = getRecipeAccess(recipe, options, acquiredRecipes)
             if allowed then
@@ -275,7 +378,8 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
                 recipe = recipe, expectedCost = totalExpectedCost, reagentCost = block.reagentCost,
                 expectedCrafts = block.expectedCrafts, covered = block.covered,
                 craftCost = block.reagentCost / block.expectedCrafts,
-                stock = block.stock, shopping = block.shopping, usedInventory = block.usedInventory,
+                craftedStock = block.craftedStock, inventoryStock = block.inventoryStock,
+                shopping = block.shopping, usedInventory = block.usedInventory,
                 acquisitionItem = acquisitionItem, acquisitionCost = acquisitionCost,
                 score = block.score + ((acquisitionCost or 0) / block.covered),
                 fastScore = (block.expectedCrafts * craftSecondsPerCast) / block.covered
@@ -341,7 +445,8 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
     end
 
     if previousRecipe and best.recipe ~= previousRecipe then retiredRecipes[previousRecipe] = true end
-    stock = best.stock
+    craftedStock = best.craftedStock
+    inventoryStock = best.inventoryStock
     local stepMaterials = {}
     mergeShopping(stepMaterials, best.shopping)
     for itemId, quantity in pairs(best.shopping or {}) do shopping[itemId] = (shopping[itemId] or 0) + quantity end
@@ -382,6 +487,7 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
     total = total + best.expectedCost
     previousRecipe = best.recipe
     skill = blockEnd
+    end
   end
   local recipeOpportunities = {}
   for _, opportunity in pairs(opportunityMap) do table.insert(recipeOpportunities, opportunity) end

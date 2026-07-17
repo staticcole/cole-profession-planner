@@ -300,6 +300,9 @@ function SPP.UI:CreatePlanRow(parent, index)
     GameTooltip:AddDoubleLine("Skill", self.step.fromSkill .. " - " .. self.step.toSkill, 0.7, 0.8, 1, 1, 1, 1)
     GameTooltip:AddDoubleLine("Expected crafts", string.format("%.1f", self.step.expectedCrafts), 0.7, 0.8, 1, 1, 1, 1)
     GameTooltip:AddDoubleLine("Craft time", formatDuration(self.step.craftSeconds, self.step.craftTimeEstimated), 0.7, 0.8, 1, 1, 1, 1)
+    if self.step.mandatory then
+      GameTooltip:AddLine("Required progression craft; planned exactly once.", 1, 0.82, 0.2, true)
+    end
     GameTooltip:AddLine(" ")
     GameTooltip:AddLine("Shopping materials for this step", 1, 0.82, 0)
     local materials = getStepMaterialRows(self.step)
@@ -932,7 +935,8 @@ function SPP.UI:UpdatePlanRows()
       row.time:SetText(formatDuration(step.craftSeconds, step.craftTimeEstimated))
       row.cost:SetText(SPP:FormatMoney(step.cost)
         .. (step.usedInventory and "  |cff75c94fbags|r" or "")
-        .. (step.acquisitionItem and "  |cffffd34erecipe|r" or ""))
+        .. (step.acquisitionItem and "  |cffffd34erecipe|r" or "")
+        .. (step.mandatory and "  |cffffd34erequired|r" or ""))
     end
     if not step then row.step = nil end
   end

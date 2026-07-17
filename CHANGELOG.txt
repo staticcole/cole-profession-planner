@@ -1,6 +1,15 @@
 COLE PROFESSION PLANNER CHANGELOG
 =================================
 
+0.9.12-tbc
+----------
+
+- Added mandatory one-craft progression steps for the full Runed Rod chain.
+- Reserved exactly one skill point for each required rod instead of a five-point planning block.
+- Reused intermediate items crafted earlier in the route, including Fine Leather Belt for Dark Leather Belt.
+- Separated crafted intermediates from bag and bank inventory in route labels and material totals.
+- Excluded completed lower rod ranks from range price refreshes when a higher rod is already available.
+
 0.9.11-tbc
 ----------
 
