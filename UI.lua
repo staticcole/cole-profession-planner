@@ -428,6 +428,41 @@ function SPP.UI:OpenProfession()
   return false, "The client could not open " .. (known.name or self.profession)
 end
 
+function SPP.UI:LoadSavedPlan(profession)
+  local savedPlans = ColeProfessionPlannerDB and ColeProfessionPlannerDB.savedPlans
+  local plan = SPP.Planner:RestorePlan(savedPlans and savedPlans[profession])
+  if not plan then return false end
+  self.profession = plan.profession
+  self.expansion = plan.maxExpansion or self.expansion
+  self.phase = plan.maxPhase or self.phase
+  self.routeMode = plan.routeMode
+  self.plan, self.planMessage = plan, nil
+  self.planOffset, self.shoppingOffset = 0, 0
+  if self.expansionMenu then
+    UIDropDownMenu_SetSelectedValue(self.expansionMenu, self.expansion)
+    UIDropDownMenu_SetText(self.expansionMenu, EXPANSIONS[self.expansion])
+  end
+  if self.phaseMenu then
+    UIDropDownMenu_SetSelectedValue(self.phaseMenu, self.phase)
+    UIDropDownMenu_SetText(self.phaseMenu, phaseLabel(self.expansion, self.phase))
+  end
+  if self.routeModeMenu then
+    UIDropDownMenu_SetSelectedValue(self.routeModeMenu, self.routeMode)
+    UIDropDownMenu_SetText(self.routeModeMenu, self.routeMode == "fast" and ROUTE_MODES[1].label or ROUTE_MODES[2].label)
+  end
+  if self.fromBox then self.fromBox:SetText(plan.fromSkill) end
+  if self.toBox then self.toBox:SetText(plan.toSkill) end
+  return true
+end
+
+function SPP.UI:SavePlan(plan)
+  local saved = SPP.Planner:SerializePlan(plan)
+  if not saved then return end
+  ColeProfessionPlannerDB.savedPlans = ColeProfessionPlannerDB.savedPlans or {}
+  ColeProfessionPlannerDB.savedPlans[plan.profession] = saved
+  ColeProfessionPlannerDB.lastPlanProfession = plan.profession
+end
+
 function SPP.UI:Create()
   if self.frame then return end
   local client = SPP.Client:GetInfo()
@@ -437,6 +472,7 @@ function SPP.UI:Create()
   self.phase = client.phase
   self.skill = knownProfessions[self.profession] and knownProfessions[self.profession].rank or 1
   self.routeMode = ColeProfessionPlannerDB.routeMode == "fast" and "fast" or "economy"
+  self:LoadSavedPlan(ColeProfessionPlannerDB.lastPlanProfession)
 
   local frame = CreateFrame("Frame", "ColeProfessionPlannerFrame", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
   self.frame = frame
@@ -593,15 +629,21 @@ function SPP.UI:Create()
     return SPP.Client:GetProfessionChoices()
   end
   self.professionMenu = dropdown(self.settingsPanel, 145, professionValues, function(value)
+    self.plan = nil
     self.profession = value
     self.skill = 1
     self:SyncProfessionSkill(true)
-    self.offset, self.planOffset, self.shoppingOffset, self.plan = 0, 0, 0, nil
+    self:LoadSavedPlan(value)
+    self.offset, self.planOffset, self.shoppingOffset = 0, 0, 0
     self:Refresh()
   end)
   self.professionMenu:SetPoint("TOPLEFT", 38, -31)
   UIDropDownMenu_SetSelectedValue(self.professionMenu, self.profession)
-  UIDropDownMenu_SetText(self.professionMenu, professionChoices[1] and professionChoices[1].label or "Alchemy")
+  local selectedProfessionLabel = "Alchemy"
+  for _, choice in ipairs(professionChoices) do
+    if choice.value == self.profession then selectedProfessionLabel = choice.label break end
+  end
+  UIDropDownMenu_SetText(self.professionMenu, selectedProfessionLabel)
   self.openProfessionButton = CreateFrame("Button", nil, self.settingsPanel, "UIPanelButtonTemplate")
   self.openProfessionButton:SetSize(26, 26)
   self.openProfessionButton:SetPoint("TOPLEFT", 8, -32)
@@ -653,12 +695,12 @@ function SPP.UI:Create()
   fromLabel:SetPoint("TOPLEFT", 10, -151)
   self.fromBox = editBox(self.settingsPanel, 50, true)
   self.fromBox:SetPoint("LEFT", fromLabel, "RIGHT", 7, 0)
-  self.fromBox:SetText(self.skill)
+  self.fromBox:SetText(self.plan and self.plan.fromSkill or self.skill)
   local toLabel = label(self.settingsPanel, "To")
   toLabel:SetPoint("LEFT", self.fromBox, "RIGHT", 14, 0)
   self.toBox = editBox(self.settingsPanel, 50, true)
   self.toBox:SetPoint("LEFT", toLabel, "RIGHT", 7, 0)
-  self.toBox:SetText(client.maxSkill)
+  self.toBox:SetText(self.plan and self.plan.toSkill or client.maxSkill)
 
   local modeLabel = label(self.settingsPanel, "Calculation mode")
   modeLabel:SetPoint("TOPLEFT", 10, -184)
@@ -877,6 +919,10 @@ function SPP.UI:BuildPlan()
   end
   options.inventory = inventory
   local plan, message, priceScan = SPP.Planner:Build(self.profession, fromSkill, toSkill, options)
+  if plan then
+    plan.restored = false
+    self:SavePlan(plan)
+  end
   self.plan, self.planMessage = plan or priceScan, message
   if self.useBags:GetChecked() then
     self.useBagsLabel:SetText("Bags/bank " .. SPP.Inventory:GetRelevantCount(currentInventory))
@@ -972,6 +1018,9 @@ function SPP.UI:UpdatePlanRows()
         "Route calculated; %d optional material price%s missing. Refresh range prices for a complete comparison.",
         skipped, skipped == 1 and " is" or "s are"
       ))
+    elseif self.plan and self.plan.restored then
+      self.planError:SetTextColor(0.45, 1, 0.45)
+      self.planError:SetText("Restored the last saved route. Recalculate only when you want to replace it.")
     else
       self.planError:SetTextColor(1, 0.35, 0.25)
       self.planError:SetText(self.plan and "" or (self.planMessage or ""))
@@ -1090,7 +1139,7 @@ function SPP.UI:Toggle()
   if self.frame:IsShown() then
     self.frame:Hide()
   else
-    self:SyncProfessionSkill(true)
+    self:SyncProfessionSkill(self.plan == nil)
     self.frame:Show()
     self:Refresh()
   end

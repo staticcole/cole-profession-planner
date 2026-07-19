@@ -1,6 +1,14 @@
 COLE PROFESSION PLANNER CHANGELOG
 =================================
 
+0.9.13-tbc
+----------
+
+- Saved the latest successful route separately for each profession and restored it after reloads or profession switches.
+- Preserved the purchased-material shopping list, route steps, costs and craft-time estimates in a compact SavedVariables snapshot.
+- Stopped planning blocks at newly available recipe thresholds before reevaluating the best recipe.
+- Kept five-point blocks as the maximum block size instead of crossing a better recipe unlock by one skill point.
+
 0.9.12-tbc
 ----------
 

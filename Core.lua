@@ -114,6 +114,7 @@ addon:SetScript("OnEvent", function(_, event, name)
     ColeProfessionPlannerDB = ColeProfessionPlannerDB or SolProfessionPlannerDB or {}
     ColeProfessionPlannerDB.manualPrices = ColeProfessionPlannerDB.manualPrices or {}
     ColeProfessionPlannerDB.volumePrices = ColeProfessionPlannerDB.volumePrices or {}
+    ColeProfessionPlannerDB.savedPlans = ColeProfessionPlannerDB.savedPlans or {}
     ColeProfessionPlannerDB.routeMode = ColeProfessionPlannerDB.routeMode == "fast" and "fast" or "economy"
     SPP.Data:Finalize()
     SPP.Client:Detect()
@@ -144,7 +145,7 @@ addon:SetScript("OnEvent", function(_, event, name)
   elseif event == "SKILL_LINES_CHANGED" then
     SPP.Client:RecordCharacterProfessions()
     if SPP.UI.frame then
-      SPP.UI:SyncProfessionSkill(true)
+      SPP.UI:SyncProfessionSkill(SPP.UI.plan == nil)
       SPP.UI:Refresh()
     end
   end
