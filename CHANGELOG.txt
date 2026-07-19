@@ -1,6 +1,15 @@
 COLE PROFESSION PLANNER CHANGELOG
 =================================
 
+0.9.15-tbc
+----------
+
+- Added a no-travel route policy that skips unknown vendor recipes by default.
+- Added a Vendor trips option for players who want cheaper routes that require travel.
+- Listed skipped vendor recipes as alternatives with estimated savings and mapped sources.
+- Added a one-click route switch between no-travel and vendor-trip plans in Recipe options.
+- Kept learned recipes, recipes already in inventory and confirmed auction copies usable without vendor travel.
+
 0.9.14-tbc
 ----------
 

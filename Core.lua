@@ -171,6 +171,7 @@ addon:SetScript("OnEvent", function(_, event, name)
     ColeProfessionPlannerDB.savedPlans = ColeProfessionPlannerDB.savedPlans or {}
     ColeProfessionPlannerDB.vendorRecipeStock = ColeProfessionPlannerDB.vendorRecipeStock or {}
     ColeProfessionPlannerDB.routeMode = ColeProfessionPlannerDB.routeMode == "fast" and "fast" or "economy"
+    ColeProfessionPlannerDB.includeVendorRecipes = ColeProfessionPlannerDB.includeVendorRecipes == true
     SPP.Data:Finalize()
     SPP.Client:Detect()
     SLASH_COLEPROFESSIONPLANNER1 = "/cole"

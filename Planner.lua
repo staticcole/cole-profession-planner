@@ -225,7 +225,8 @@ local function getRecipeAccess(recipe, options, acquiredRecipes)
   if SPP.Data:IsCommonRecipe(recipe, maxExpansion, maxPhase) then
     return true, nil, nil, "trainer"
   end
-  if SPP.Data:IsVendorRecipe(recipe, maxExpansion, maxPhase) then
+  local vendorRecipe = SPP.Data:IsVendorRecipe(recipe, maxExpansion, maxPhase)
+  if vendorRecipe then
     if recipeItem and options.inventory and (options.inventory[recipeItem] or 0) >= 1 then
       return true, nil, nil, "owned", recipeItem
     end
@@ -233,19 +234,23 @@ local function getRecipeAccess(recipe, options, acquiredRecipes)
     local stock = recipeItem and ColeProfessionPlannerDB and ColeProfessionPlannerDB.vendorRecipeStock
       and ColeProfessionPlannerDB.vendorRecipeStock[recipeItem] or nil
     local freshStock = stock and currentTime() - (stock.checkedAt or 0) <= VENDOR_STOCK_TTL_SECONDS
-    if not limited or (freshStock and stock.available) then
+    if options.includeVendorRecipes and (not limited or (freshStock and stock.available)) then
       return true, recipeItem, SPP.Data:GetVendorPrice(recipeItem) or 0, "vendor", recipeItem
     end
   end
-  if not options.includeRareRecipes then return false, recipeItem end
+  local blockedKind = vendorRecipe
+    and (options.includeVendorRecipes and "vendor-unconfirmed" or "vendor-optional")
+    or nil
+  local blockedCost = vendorRecipe and (SPP.Data:GetVendorPrice(recipeItem) or 0) or nil
+  if not options.includeRareRecipes then return false, recipeItem, blockedCost, blockedKind, recipeItem end
   if not recipeItem then return false end
   local available, price
   if SPP.Auctionator and SPP.Auctionator.IsItemCurrentlyAvailable then
     available, price = SPP.Auctionator:IsItemCurrentlyAvailable(recipeItem)
   end
   if available and price then return true, recipeItem, price, "auction", recipeItem end
-  local kind = SPP.Data:IsVendorRecipe(recipe, maxExpansion, maxPhase) and "vendor-unconfirmed" or "auction"
-  return false, recipeItem, nil, kind, recipeItem
+  local kind = blockedKind or "auction"
+  return false, recipeItem, blockedCost, kind, recipeItem
 end
 
 local function getNextRecipeUnlock(recipes, skill, targetSkill, options, acquiredRecipes)
@@ -321,6 +326,7 @@ local function buildPriceScan(profession, startSkill, targetSkill, options, refr
     profession = profession, fromSkill = startSkill, toSkill = targetSkill,
     maxExpansion = options.maxExpansion or 2, maxPhase = options.maxPhase or 9,
     routeMode = options.routeMode or "economy",
+    includeVendorRecipes = options.includeVendorRecipes == true,
     totalCost = nil, steps = {}, shopping = shopping, usedInventory = options.inventory ~= nil,
     refreshShopping = refreshShopping, priceDiscovery = true, missingPriceCount = count
   }
@@ -443,11 +449,14 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
               end
             elseif acquisitionKind == "seasonal" then
               seasonalMap[recipe[SPP.R.SPELL]] = recipe
-            elseif acquisitionItem and options.includeRareRecipes then
+            elseif acquisitionItem and (options.includeRareRecipes or acquisitionKind == "vendor-optional"
+              or acquisitionKind == "vendor-unconfirmed") then
               rareCandidates = rareCandidates or {}
               table.insert(rareCandidates, {
-                recipe = recipe, itemId = acquisitionItem, expectedCost = block.reagentCost,
-                score = block.score, covered = block.covered, acquisitionKind = acquisitionKind
+                recipe = recipe, itemId = acquisitionItem,
+                expectedCost = block.reagentCost + (acquisitionCost or 0),
+                score = block.score + ((acquisitionCost or 0) / block.covered),
+                covered = block.covered, acquisitionKind = acquisitionKind
               })
             end
         elseif missingItem then
@@ -558,15 +567,17 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
     profession = profession, fromSkill = startSkill, toSkill = targetSkill,
     maxExpansion = options.maxExpansion or 2, maxPhase = options.maxPhase or 9,
     routeMode = routeMode,
+    includeVendorRecipes = options.includeVendorRecipes == true,
     totalCost = total, steps = steps, shopping = shopping, usedInventory = inventoryApplied,
     refreshShopping = refreshShopping,
     recipeOpportunities = recipeOpportunities,
     seasonalExclusions = seasonalExclusions,
     skippedMissingPriceCount = skippedMissingPriceCount,
     calculatedAt = currentTime(),
-    selection = routeMode == "fast"
+    selection = (routeMode == "fast"
       and string.format("Fast: up to %d-point blocks, %d%% faster to switch", BLOCK_SKILL_POINTS, math.floor(FAST_SWITCH_THRESHOLD * 100 + 0.5))
-      or string.format("Economy: up to %d-point blocks, %d%% minimum savings to switch", BLOCK_SKILL_POINTS, math.floor(SWITCH_SAVINGS_THRESHOLD * 100 + 0.5))
+      or string.format("Economy: up to %d-point blocks, %d%% minimum savings to switch", BLOCK_SKILL_POINTS, math.floor(SWITCH_SAVINGS_THRESHOLD * 100 + 0.5)))
+      .. (options.includeVendorRecipes and " | vendor trips allowed" or " | no vendor travel")
   }
 end
 
@@ -588,6 +599,7 @@ function SPP.Planner:SerializePlan(plan)
     maxExpansion = plan.maxExpansion,
     maxPhase = plan.maxPhase,
     routeMode = plan.routeMode,
+    includeVendorRecipes = plan.includeVendorRecipes == true,
     totalCost = plan.totalCost,
     usedInventory = plan.usedInventory,
     skippedMissingPriceCount = plan.skippedMissingPriceCount,
@@ -638,6 +650,15 @@ function SPP.Planner:RestorePlan(saved)
   for _, recipe in ipairs(SPP.Data.professions[saved.profession]) do
     recipesBySpell[recipe[SPP.R.SPELL]] = recipe
   end
+  local includeVendorRecipes = saved.includeVendorRecipes == true
+  if saved.includeVendorRecipes == nil then
+    for _, savedStep in ipairs(saved.steps or {}) do
+      if savedStep.acquisitionKind == "vendor" then
+        includeVendorRecipes = true
+        break
+      end
+    end
+  end
   local plan = {
     profession = saved.profession,
     fromSkill = saved.fromSkill,
@@ -645,6 +666,7 @@ function SPP.Planner:RestorePlan(saved)
     maxExpansion = saved.maxExpansion,
     maxPhase = saved.maxPhase,
     routeMode = saved.routeMode == "fast" and "fast" or "economy",
+    includeVendorRecipes = includeVendorRecipes,
     totalCost = saved.totalCost,
     usedInventory = saved.usedInventory,
     skippedMissingPriceCount = saved.skippedMissingPriceCount or 0,

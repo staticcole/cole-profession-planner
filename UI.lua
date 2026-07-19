@@ -437,6 +437,8 @@ function SPP.UI:CreateRecipeOptionsFrame()
       GameTooltip:SetText(recipe[SPP.R.NAME], 1, 1, 1)
       if row.entry.seasonal then
         GameTooltip:AddLine("Excluded from the route until this character has learned it.", 1, 0.45, 0.25, true)
+      elseif row.entry.acquisitionKind == "vendor-optional" then
+        GameTooltip:AddLine("The no-travel route is active. Enable vendor trips only if this saving is worth the journey.", 1, 0.82, 0.2, true)
       elseif row.entry.acquisitionKind == "vendor-unconfirmed" then
         GameTooltip:AddLine("The route does not assume this recipe until vendor stock or an auction listing is confirmed.", 1, 0.82, 0.2, true)
       end
@@ -455,6 +457,16 @@ function SPP.UI:CreateRecipeOptionsFrame()
     local ok, message = SPP.Auctionator:SearchRecipeOpportunities(self.plan)
     self.shoppingStatus:SetTextColor(ok and 0.45 or 1, ok and 1 or 0.35, ok and 0.45 or 0.25)
     self.shoppingStatus:SetText(message or "")
+  end)
+  frame.travel = button(frame, "Allow vendor trips", 150, 24)
+  frame.travel:SetPoint("BOTTOM", 0, 16)
+  frame.travel:SetScript("OnClick", function()
+    local enabled = not (self.includeVendorRecipes and self.includeVendorRecipes:GetChecked())
+    self.includeVendorRecipesValue = enabled
+    ColeProfessionPlannerDB.includeVendorRecipes = enabled
+    if self.includeVendorRecipes then self.includeVendorRecipes:SetChecked(enabled) end
+    self:BuildPlan()
+    self:ShowRecipeOptions()
   end)
   frame.count = label(frame, "")
   frame.count:SetPoint("BOTTOMLEFT", 18, 21)
@@ -484,6 +496,8 @@ function SPP.UI:UpdateRecipeOptionsFrame()
           if type(extra) == "string" and extra ~= "" then requirement = extra break end
         end
         details = "Unavailable unless already learned | " .. (requirement or summary)
+      elseif entry.acquisitionKind == "vendor-optional" then
+        details = "Skipped: vendor travel disabled | " .. summary
       elseif entry.acquisitionKind == "vendor-unconfirmed" then
         details = (SPP.Data:IsLimitedVendorRecipe(recipe, self.expansion, self.phase) and "Limited stock not confirmed | " or "Vendor not confirmed | ") .. summary
       else
@@ -498,6 +512,8 @@ function SPP.UI:UpdateRecipeOptionsFrame()
   end
   local auctionCount = #(self.plan and self.plan.recipeOpportunities or {})
   frame.search:SetEnabled(auctionCount > 0)
+  local tripsAllowed = self.includeVendorRecipes and self.includeVendorRecipes:GetChecked()
+  frame.travel:SetText(tripsAllowed and "Use no-travel route" or "Allow vendor trips")
   frame.count:SetText(string.format("%d recipe option%s", #entries, #entries == 1 and "" or "s"))
 end
 
@@ -543,6 +559,8 @@ function SPP.UI:GetPricingOptions()
   return {
     maxExpansion = self.expansion, maxPhase = self.phase,
     includeRareRecipes = self.includeRareRecipes and self.includeRareRecipes:GetChecked() or true,
+    includeVendorRecipes = self.includeVendorRecipes and self.includeVendorRecipes:GetChecked()
+      or self.includeVendorRecipesValue == true,
     routeMode = self.routeMode == "fast" and "fast" or "economy",
     knownRecipes = self.knownRecipes, availableProfessions = available
   }
@@ -602,6 +620,7 @@ function SPP.UI:LoadSavedPlan(profession)
   self.expansion = plan.maxExpansion or self.expansion
   self.phase = plan.maxPhase or self.phase
   self.routeMode = plan.routeMode
+  self.includeVendorRecipesValue = plan.includeVendorRecipes == true
   self.plan, self.planMessage = plan, nil
   self.planOffset, self.shoppingOffset = 0, 0
   if self.expansionMenu then
@@ -616,6 +635,7 @@ function SPP.UI:LoadSavedPlan(profession)
     UIDropDownMenu_SetSelectedValue(self.routeModeMenu, self.routeMode)
     UIDropDownMenu_SetText(self.routeModeMenu, self.routeMode == "fast" and ROUTE_MODES[1].label or ROUTE_MODES[2].label)
   end
+  if self.includeVendorRecipes then self.includeVendorRecipes:SetChecked(self.includeVendorRecipesValue) end
   if self.fromBox then self.fromBox:SetText(plan.fromSkill) end
   if self.toBox then self.toBox:SetText(plan.toSkill) end
   return true
@@ -638,6 +658,7 @@ function SPP.UI:Create()
   self.phase = client.phase
   self.skill = knownProfessions[self.profession] and knownProfessions[self.profession].rank or 1
   self.routeMode = ColeProfessionPlannerDB.routeMode == "fast" and "fast" or "economy"
+  self.includeVendorRecipesValue = ColeProfessionPlannerDB.includeVendorRecipes == true
   self:LoadSavedPlan(ColeProfessionPlannerDB.lastPlanProfession)
 
   local frame = CreateFrame("Frame", "ColeProfessionPlannerFrame", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
@@ -939,21 +960,42 @@ function SPP.UI:Create()
   end)
   self.includeRareRecipes:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
+  self.includeVendorRecipes = CreateFrame("CheckButton", nil, self.settingsPanel, "UICheckButtonTemplate")
+  self.includeVendorRecipes:SetSize(24, 24)
+  self.includeVendorRecipes:SetPoint("TOPLEFT", 7, -327)
+  self.includeVendorRecipes:SetChecked(self.includeVendorRecipesValue)
+  self.includeVendorRecipesLabel = label(self.settingsPanel, "Vendor trips")
+  self.includeVendorRecipesLabel:SetPoint("LEFT", self.includeVendorRecipes, "RIGHT", 2, 0)
+  self.includeVendorRecipes:SetScript("OnClick", function(control)
+    local enabled = control:GetChecked() == true
+    self.includeVendorRecipesValue = enabled
+    ColeProfessionPlannerDB.includeVendorRecipes = enabled
+    if self.plan and not self.plan.priceDiscovery then self:BuildPlan() end
+  end)
+  self.includeVendorRecipes:SetScript("OnEnter", function(control)
+    GameTooltip:SetOwner(control, "ANCHOR_RIGHT")
+    GameTooltip:SetText("Allow vendor trips")
+    GameTooltip:AddLine("Off builds a fallback route without traveling for unknown vendor recipes.", 1, 1, 1, true)
+    GameTooltip:AddLine("Recipe options shows the possible savings and mapped source. Learned recipes and confirmed auction copies remain usable.", 0.75, 0.9, 0.75, true)
+    GameTooltip:Show()
+  end)
+  self.includeVendorRecipes:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
   self.buildButton = button(self.settingsPanel, "Calculate route", 188, 28)
-  self.buildButton:SetPoint("TOPLEFT", 10, -335)
+  self.buildButton:SetPoint("TOPLEFT", 10, -364)
   self.buildButton:SetScript("OnClick", function() self:BuildPlan() end)
 
   self.totalLabel = label(self.settingsPanel, "")
-  self.totalLabel:SetPoint("TOPLEFT", 10, -377)
+  self.totalLabel:SetPoint("TOPLEFT", 10, -406)
   self.totalLabel:SetWidth(190)
   self.totalLabel:SetJustifyH("LEFT")
   self.totalLabel:SetFontObject("GameFontNormal")
   self.selectionLabel = label(self.settingsPanel, "", "GameFontDisableSmall")
-  self.selectionLabel:SetPoint("TOPLEFT", 10, -400)
+  self.selectionLabel:SetPoint("TOPLEFT", 10, -429)
   self.selectionLabel:SetWidth(190)
   self.selectionLabel:SetJustifyH("LEFT")
   self.miningNote = label(self.settingsPanel, "")
-  self.miningNote:SetPoint("TOPLEFT", 10, -435)
+  self.miningNote:SetPoint("TOPLEFT", 10, -464)
   self.miningNote:SetWidth(190)
   self.miningNote:SetJustifyH("LEFT")
   self:UpdateMiningNote()
@@ -1127,6 +1169,8 @@ function SPP.UI:BuildFullRefreshPlan()
     and existingPlan.toSkill == toSkill
     and existingPlan.maxExpansion == self.expansion
     and existingPlan.maxPhase == self.phase
+    and existingPlan.routeMode == options.routeMode
+    and existingPlan.includeVendorRecipes == (options.includeVendorRecipes == true)
   return {
     profession = self.profession, fromSkill = fromSkill, toSkill = toSkill,
     maxExpansion = self.expansion, maxPhase = self.phase,
@@ -1274,10 +1318,21 @@ function SPP.UI:UpdateShoppingRows()
       #self.shoppingRowsData, vendorCount > 0 and (" (" .. vendorCount .. " vendor)") or "",
       SPP:FormatMoney(estimatedTotal)
     ))
-    local opportunityCount = #(self.plan.recipeOpportunities or {})
+    local opportunityCount, vendorTripCount = 0, 0
+    for _, opportunity in ipairs(self.plan.recipeOpportunities or {}) do
+      if opportunity.acquisitionKind == "vendor-optional" then
+        vendorTripCount = vendorTripCount + 1
+      else
+        opportunityCount = opportunityCount + 1
+      end
+    end
     local notes = {}
     if vendorCount > 0 then
       table.insert(notes, string.format("Vendor supplies: %d (excluded from Auctionator).", vendorCount))
+    end
+    if vendorTripCount > 0 then
+      table.insert(notes, string.format("No-travel route active; %d vendor alternative%s available.",
+        vendorTripCount, vendorTripCount == 1 and "" or "s"))
     end
     if opportunityCount > 0 then
       table.insert(notes, string.format("Unconfirmed recipe options: %d.", opportunityCount))
