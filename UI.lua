@@ -90,8 +90,17 @@ end
 
 local function formatStepMaterials(step)
   local parts = {}
+  if step and step.acquisitionKind == "trainer" then
+    table.insert(parts, "TRAIN RECIPE")
+  elseif step and step.acquisitionKind == "owned" then
+    table.insert(parts, "LEARN " .. SPP.Data:GetItemName(step.recipeItem))
+  elseif step and (step.acquisitionKind == "vendor" or step.acquisitionKind == "auction") then
+    table.insert(parts, "BUY RECIPE: " .. SPP.Data:GetItemName(step.recipeItem or step.acquisitionItem))
+  end
   for _, material in ipairs(getStepMaterialRows(step)) do
-    table.insert(parts, material.name .. " x" .. formatQuantity(material.quantity))
+    if material.itemId ~= step.acquisitionItem then
+      table.insert(parts, material.name .. " x" .. formatQuantity(material.quantity))
+    end
   end
   return #parts > 0 and table.concat(parts, ", ") or "No shopping materials"
 end
@@ -303,6 +312,21 @@ function SPP.UI:CreatePlanRow(parent, index)
     if self.step.mandatory then
       GameTooltip:AddLine("Required progression craft; planned exactly once.", 1, 0.82, 0.2, true)
     end
+    if self.step.acquisitionKind then
+      GameTooltip:AddLine(" ")
+      if self.step.acquisitionKind == "trainer" then
+        GameTooltip:AddLine("Recipe must be trained before this step.", 1, 0.82, 0.2, true)
+      elseif self.step.acquisitionKind == "owned" then
+        GameTooltip:AddLine("Learn " .. SPP.Data:GetItemName(self.step.recipeItem) .. " from your inventory before this step.", 1, 0.82, 0.2, true)
+      elseif self.step.acquisitionKind == "vendor" then
+        GameTooltip:AddLine("Buy and learn " .. SPP.Data:GetItemName(self.step.recipeItem) .. " before this step.", 1, 0.82, 0.2, true)
+      elseif self.step.acquisitionKind == "auction" then
+        GameTooltip:AddLine("Buy and learn " .. SPP.Data:GetItemName(self.step.recipeItem) .. "; a fresh auction listing was confirmed.", 1, 0.82, 0.2, true)
+      end
+      for _, source in ipairs(SPP.Data:GetAvailableSources(self.step.recipe, SPP.UI.expansion, SPP.UI.phase)) do
+        GameTooltip:AddLine(SPP.Data:GetSourceText(source, false), 0.8, 0.9, 1, true)
+      end
+    end
     GameTooltip:AddLine(" ")
     GameTooltip:AddLine("Shopping materials for this step", 1, 0.82, 0)
     local materials = getStepMaterialRows(self.step)
@@ -319,6 +343,12 @@ function SPP.UI:CreatePlanRow(parent, index)
     GameTooltip:Show()
   end)
   row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  row:SetScript("OnClick", function(self)
+    if self.step and self.step.acquisitionKind then
+      local ok, message = SPP.Map:OpenRecipeSources(self.step.recipe, SPP.UI.expansion, SPP.UI.phase)
+      if message then print("|cff75c94fCole:|r " .. message) end
+    end
+  end)
   row:Hide()
   return row
 end
@@ -346,6 +376,142 @@ function SPP.UI:CreateShoppingRow(parent, index)
   row.cost:SetJustifyH("RIGHT")
   row:Hide()
   return row
+end
+
+function SPP.UI:CreateRecipeOptionsFrame()
+  if self.recipeOptionsFrame then return self.recipeOptionsFrame end
+  local frame = CreateFrame("Frame", "ColeProfessionPlannerRecipeOptionsFrame", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
+  frame:SetSize(660, 350)
+  frame:SetPoint("CENTER")
+  frame:SetFrameStrata("DIALOG")
+  frame:SetBackdrop({
+    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border", edgeSize = 24,
+    insets = { left = 8, right = 8, top = 8, bottom = 8 }
+  })
+  frame:SetBackdropColor(0.025, 0.03, 0.025, 1)
+  frame:SetBackdropBorderColor(0.45, 0.48, 0.42, 1)
+  frame:EnableMouseWheel(true)
+  frame:SetScript("OnMouseWheel", function(_, delta)
+    local count = #(self.recipeOptionEntries or {})
+    self.recipeOptionOffset = math.max(0, math.min(math.max(0, count - 6), (self.recipeOptionOffset or 0) - delta))
+    self:UpdateRecipeOptionsFrame()
+  end)
+  local title = label(frame, "Recipe acquisition options", "GameFontNormalLarge")
+  title:SetPoint("TOPLEFT", 18, -16)
+  local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
+  close:SetPoint("TOPRIGHT", -5, -5)
+  frame.rows = {}
+  for index = 1, 6 do
+    local row = CreateFrame("Frame", nil, frame)
+    row:SetHeight(42)
+    row:SetPoint("TOPLEFT", 16, -48 - ((index - 1) * 44))
+    row:SetPoint("TOPRIGHT", -16, -48 - ((index - 1) * 44))
+    row.icon = row:CreateTexture(nil, "ARTWORK")
+    row.icon:SetSize(30, 30)
+    row.icon:SetPoint("LEFT", 2, 0)
+    row.name = label(row, "")
+    row.name:SetPoint("TOPLEFT", 40, -3)
+    row.name:SetWidth(205)
+    row.name:SetJustifyH("LEFT")
+    row.details = label(row, "", "GameFontDisableSmall")
+    row.details:SetPoint("BOTTOMLEFT", 40, 3)
+    row.details:SetPoint("RIGHT", -88, 0)
+    row.details:SetJustifyH("LEFT")
+    row.savings = label(row, "")
+    row.savings:SetPoint("TOPRIGHT", -88, -3)
+    row.savings:SetWidth(90)
+    row.savings:SetJustifyH("RIGHT")
+    row.sources = button(row, "Sources", 78, 22)
+    row.sources:SetPoint("RIGHT", -2, 0)
+    row.sources:SetScript("OnClick", function()
+      if not row.entry then return end
+      local ok, message = SPP.Map:OpenRecipeSources(row.entry.recipe, self.expansion, self.phase)
+      if message then print("|cff75c94fCole:|r " .. message) end
+    end)
+    row:EnableMouse(true)
+    row:SetScript("OnEnter", function()
+      if not row.entry then return end
+      local recipe = row.entry.recipe
+      GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+      GameTooltip:SetText(recipe[SPP.R.NAME], 1, 1, 1)
+      if row.entry.seasonal then
+        GameTooltip:AddLine("Excluded from the route until this character has learned it.", 1, 0.45, 0.25, true)
+      elseif row.entry.acquisitionKind == "vendor-unconfirmed" then
+        GameTooltip:AddLine("The route does not assume this recipe until vendor stock or an auction listing is confirmed.", 1, 0.82, 0.2, true)
+      end
+      for _, source in ipairs(SPP.Data:GetAvailableSources(recipe, self.expansion, self.phase)) do
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddLine(SPP.Data:GetSourceText(source, true), 0.85, 0.9, 1, true)
+      end
+      GameTooltip:Show()
+    end)
+    row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    table.insert(frame.rows, row)
+  end
+  frame.search = button(frame, "Search recipe items at AH", 190, 24)
+  frame.search:SetPoint("BOTTOMRIGHT", -18, 16)
+  frame.search:SetScript("OnClick", function()
+    local ok, message = SPP.Auctionator:SearchRecipeOpportunities(self.plan)
+    self.shoppingStatus:SetTextColor(ok and 0.45 or 1, ok and 1 or 0.35, ok and 0.45 or 0.25)
+    self.shoppingStatus:SetText(message or "")
+  end)
+  frame.count = label(frame, "")
+  frame.count:SetPoint("BOTTOMLEFT", 18, 21)
+  frame:Hide()
+  self.recipeOptionsFrame = frame
+  if UISpecialFrames then table.insert(UISpecialFrames, "ColeProfessionPlannerRecipeOptionsFrame") end
+  return frame
+end
+
+function SPP.UI:UpdateRecipeOptionsFrame()
+  local frame = self.recipeOptionsFrame
+  if not frame then return end
+  local entries = self.recipeOptionEntries or {}
+  for index, row in ipairs(frame.rows) do
+    local entry = entries[(self.recipeOptionOffset or 0) + index]
+    row.entry = entry
+    if not entry then
+      row:Hide()
+    else
+      local recipe = entry.recipe
+      local summary = SPP.Data:GetSourceSummary(recipe, self.expansion, self.phase)
+      local details
+      if entry.seasonal then
+        local requirement
+        for _, source in ipairs(SPP.Data:GetAvailableSources(recipe, self.expansion, self.phase)) do
+          local extra = source[SPP.S.EXTRA]
+          if type(extra) == "string" and extra ~= "" then requirement = extra break end
+        end
+        details = "Unavailable unless already learned | " .. (requirement or summary)
+      elseif entry.acquisitionKind == "vendor-unconfirmed" then
+        details = (SPP.Data:IsLimitedVendorRecipe(recipe, self.expansion, self.phase) and "Limited stock not confirmed | " or "Vendor not confirmed | ") .. summary
+      else
+        details = "No confirmed auction listing | " .. summary
+      end
+      row.icon:SetTexture(recipeIcon(recipe))
+      row.name:SetText(recipe[SPP.R.NAME])
+      row.details:SetText(details)
+      row.savings:SetText(entry.estimatedSavings and ("Save ~" .. SPP:FormatMoney(entry.estimatedSavings)) or "Blocked")
+      row:Show()
+    end
+  end
+  local auctionCount = #(self.plan and self.plan.recipeOpportunities or {})
+  frame.search:SetEnabled(auctionCount > 0)
+  frame.count:SetText(string.format("%d recipe option%s", #entries, #entries == 1 and "" or "s"))
+end
+
+function SPP.UI:ShowRecipeOptions()
+  local frame = self:CreateRecipeOptionsFrame()
+  self.recipeOptionEntries, self.recipeOptionOffset = {}, 0
+  for _, opportunity in ipairs(self.plan and self.plan.recipeOpportunities or {}) do
+    table.insert(self.recipeOptionEntries, opportunity)
+  end
+  for _, recipe in ipairs(self.plan and self.plan.seasonalExclusions or {}) do
+    table.insert(self.recipeOptionEntries, { recipe = recipe, seasonal = true })
+  end
+  self:UpdateRecipeOptionsFrame()
+  frame:Show()
 end
 
 function SPP.UI:GetPlanPriceFreshness(plan, now)
@@ -845,13 +1011,18 @@ function SPP.UI:Create()
     self.shoppingStatus:SetTextColor(ok and 0.45 or 1, ok and 1 or 0.35, ok and 0.45 or 0.25)
     self.shoppingStatus:SetText(message or "")
   end)
-  self.recipeSearchButton = button(self.shoppingPanel, "Recipe prices", 124, 24)
+  self.recipeSearchButton = button(self.shoppingPanel, "Recipe options", 124, 24)
   self.recipeSearchButton:SetPoint("BOTTOMRIGHT", -7, 35)
   self.recipeSearchButton:SetScript("OnClick", function()
-    local ok, message = SPP.Auctionator:SearchRecipeOpportunities(self.plan)
-    self.shoppingStatus:SetTextColor(ok and 0.45 or 1, ok and 1 or 0.35, ok and 0.45 or 0.25)
-    self.shoppingStatus:SetText(message or "")
+    self:ShowRecipeOptions()
   end)
+  self.recipeSearchButton:SetScript("OnEnter", function(control)
+    GameTooltip:SetOwner(control, "ANCHOR_TOP")
+    GameTooltip:SetText("Recipe acquisition options")
+    GameTooltip:AddLine("Shows vendor stock checks, mapped sources, auction alternatives and seasonal recipes excluded from the route.", 1, 1, 1, true)
+    GameTooltip:Show()
+  end)
+  self.recipeSearchButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
   self.searchButton = button(self.shoppingPanel, "Search at Auction House", 250, 26)
   self.searchButton:SetPoint("BOTTOM", 0, 6)
   self.searchButton:SetScript("OnClick", function()
@@ -1054,6 +1225,17 @@ function SPP.UI:OnAuctionPricesUpdated(count)
   self.shoppingStatus:SetText(message)
 end
 
+function SPP.UI:OnVendorRecipesUpdated(count)
+  if not self.frame or not self.frame:IsShown() or self.mode ~= "planner" then return end
+  self:BuildPlan()
+  local message = string.format("Checked %d vendor recipe%s and recalculated the route.", count or 0, count == 1 and "" or "s")
+  self.planError:SetTextColor(0.45, 1, 0.45)
+  self.planError:SetText(message)
+  self.shoppingStatus:SetTextColor(0.45, 1, 0.45)
+  self.shoppingStatus:SetText(message)
+  if self.recipeOptionsFrame and self.recipeOptionsFrame:IsShown() then self:ShowRecipeOptions() end
+end
+
 function SPP.UI:UpdateShoppingRows()
   self.shoppingRowsData = SPP.Auctionator:GetShoppingRows(self.plan)
   local auctionRows = SPP.Auctionator:GetShoppingRows(self.plan, true)
@@ -1064,7 +1246,7 @@ function SPP.UI:UpdateShoppingRows()
     if not material then
       row:Hide()
     else
-      local unitPrice = SPP.Price:GetUnitPrice(material.itemId)
+      local unitPrice = material.vendor and material.vendorPrice or SPP.Price:GetUnitPrice(material.itemId)
       row.icon:SetTexture(itemTexture(material.itemId))
       row.name:SetText(material.name)
       row.quantity:SetText("x" .. material.quantity)
@@ -1074,7 +1256,7 @@ function SPP.UI:UpdateShoppingRows()
     end
   end
   for _, material in ipairs(self.shoppingRowsData) do
-    local unitPrice = SPP.Price:GetUnitPrice(material.itemId)
+    local unitPrice = material.vendor and material.vendorPrice or SPP.Price:GetUnitPrice(material.itemId)
     if unitPrice then estimatedTotal = estimatedTotal + unitPrice * material.quantity end
     if material.vendor then vendorCount = vendorCount + 1 end
   end
@@ -1098,7 +1280,11 @@ function SPP.UI:UpdateShoppingRows()
       table.insert(notes, string.format("Vendor supplies: %d (excluded from Auctionator).", vendorCount))
     end
     if opportunityCount > 0 then
-      table.insert(notes, string.format("Unknown cheaper recipes: %d.", opportunityCount))
+      table.insert(notes, string.format("Unconfirmed recipe options: %d.", opportunityCount))
+    end
+    local seasonalCount = #(self.plan.seasonalExclusions or {})
+    if seasonalCount > 0 then
+      table.insert(notes, string.format("Seasonal recipes excluded: %d.", seasonalCount))
     end
     self.shoppingStatus:SetText(table.concat(notes, "  "))
   end
@@ -1106,7 +1292,7 @@ function SPP.UI:UpdateShoppingRows()
   self.searchButton:SetText(self.plan and self.plan.priceDiscovery and "Scan prices at Auction House" or "Search at Auction House")
   self.listButton:SetEnabled(self.plan ~= nil and #auctionRows > 0)
   self.searchButton:SetEnabled(self.plan ~= nil and #auctionRows > 0)
-  local opportunityCount = self.plan and #(self.plan.recipeOpportunities or {}) or 0
+  local opportunityCount = self.plan and (#(self.plan.recipeOpportunities or {}) + #(self.plan.seasonalExclusions or {})) or 0
   self.recipeSearchButton:SetShown(not (self.plan and self.plan.priceDiscovery))
   self.recipeSearchButton:SetEnabled(opportunityCount > 0)
   self:UpdatePriceFreshness()

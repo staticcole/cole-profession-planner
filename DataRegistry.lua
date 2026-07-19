@@ -1,5 +1,8 @@
 SPP = SPP or {}
-SPP.Data = SPP.Data or { professions = {}, outputs = {}, conversions = {}, conversionOutputs = {} }
+SPP.Data = SPP.Data or {
+  professions = {}, outputs = {}, conversions = {}, conversionOutputs = {},
+  vendorRecipesByNpc = {}, recipeVendorPrices = {}, vendorRecipeItems = {}
+}
 
 SPP.R = {
   SPELL = 1, NAME = 2, EXPANSION = 3, PHASE = 4, PHASE_EXACT = 5,
@@ -40,12 +43,30 @@ end
 
 function SPP.Data:Finalize()
   wipe(self.outputs)
+  wipe(self.vendorRecipesByNpc)
+  wipe(self.recipeVendorPrices)
+  wipe(self.vendorRecipeItems)
   for _, recipes in pairs(self.professions) do
     for _, recipe in ipairs(recipes) do
       local output = recipe[SPP.R.OUTPUT]
       if output then
         self.outputs[output] = self.outputs[output] or {}
         table.insert(self.outputs[output], recipe)
+      end
+      local recipeItem = recipe[SPP.R.RECIPE_ITEM]
+      if recipeItem then
+        for _, sourceId in ipairs(recipe[SPP.R.SOURCE] or {}) do
+          local source = SPP_SOURCE_DATA and SPP_SOURCE_DATA[sourceId]
+          if source and source[SPP.S.TYPE] == 2 and source[SPP.S.NPC_ID] then
+            self.vendorRecipeItems[recipeItem] = true
+            local npcId = source[SPP.S.NPC_ID]
+            self.vendorRecipesByNpc[npcId] = self.vendorRecipesByNpc[npcId] or {}
+            table.insert(self.vendorRecipesByNpc[npcId], recipe)
+            local price = type(source[SPP.S.EXTRA]) == "string"
+              and tonumber(source[SPP.S.EXTRA]:match("^limited:(%d+)$")) or nil
+            if price and price > 0 then self.recipeVendorPrices[recipeItem] = price end
+          end
+        end
       end
     end
   end
@@ -121,6 +142,12 @@ function SPP.Data:GetSourceText(source, includeDetails)
   else
     text = typeName .. (name and (": " .. name) or "")
   end
+  local extra = source[S.EXTRA]
+  if sourceType == 2 and type(extra) == "string" and extra:find("^limited:") then
+    text = text .. "\nAvailability: Limited stock; verify the vendor inventory"
+  elseif sourceType ~= 6 and type(extra) == "string" and extra ~= "" then
+    text = text .. "\nRequirements: " .. extra
+  end
   if location then text = text .. "\nLocation: " .. location end
   if includeDetails and sourceType == 3 then
     local minLevel, maxLevel = source[S.MIN_LEVEL], source[S.MAX_LEVEL]
@@ -148,9 +175,36 @@ function SPP.Data:IsCommonRecipe(recipe, maxExpansion, maxPhase)
     local sourceType = source[SPP.S.TYPE]
     local sourceName = source[SPP.S.NAME]
     local learnedByDefault = sourceType == 8 and sourceName and sourceName:lower():find("learned by default", 1, true)
-    if sourceType == 0 or sourceType == 1 or sourceType == 2 or learnedByDefault then return true end
+    if sourceType == 0 or sourceType == 1 or learnedByDefault then return true end
   end
   return false
+end
+
+function SPP.Data:HasRecipeSourceType(recipe, sourceType, maxExpansion, maxPhase)
+  for _, source in ipairs(self:GetAvailableSources(recipe, maxExpansion, maxPhase)) do
+    if source[SPP.S.TYPE] == sourceType then return true end
+  end
+  return false
+end
+
+function SPP.Data:IsSeasonalRecipe(recipe, maxExpansion, maxPhase)
+  return self:HasRecipeSourceType(recipe, 5, maxExpansion, maxPhase)
+end
+
+function SPP.Data:IsVendorRecipe(recipe, maxExpansion, maxPhase)
+  return self:HasRecipeSourceType(recipe, 2, maxExpansion, maxPhase)
+end
+
+function SPP.Data:IsLimitedVendorRecipe(recipe, maxExpansion, maxPhase)
+  for _, source in ipairs(self:GetAvailableSources(recipe, maxExpansion, maxPhase)) do
+    local extra = source[SPP.S.EXTRA]
+    if source[SPP.S.TYPE] == 2 and type(extra) == "string" and extra:find("^limited:") then return true end
+  end
+  return false
+end
+
+function SPP.Data:GetVendorRecipesForNpc(npcId)
+  return self.vendorRecipesByNpc[npcId] or {}
 end
 
 function SPP.Data:GetSourceSummary(recipe, maxExpansion, maxPhase)
@@ -182,7 +236,9 @@ end
 
 function SPP.Data:GetVendorPrice(itemId)
   local item = SPP_ITEM_DATA and SPP_ITEM_DATA[itemId]
-  return item and item[2] or nil
+  if item and item[2] ~= nil then return item[2] end
+  if self.recipeVendorPrices[itemId] ~= nil then return self.recipeVendorPrices[itemId] end
+  return self.vendorRecipeItems[itemId] and 0 or nil
 end
 
 function SPP.Data:IsVendorItem(itemId)

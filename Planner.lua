@@ -4,6 +4,7 @@ local BLOCK_SKILL_POINTS = 5
 local SWITCH_SAVINGS_THRESHOLD = 0.12
 local FAST_SWITCH_THRESHOLD = 0.05
 local REFRESH_QUANTITY_CAP = 500
+local VENDOR_STOCK_TTL_SECONDS = 10 * 60
 
 local function currentTime()
   local serverTime = GetServerTime and GetServerTime() or nil
@@ -128,8 +129,13 @@ local function isRecipeKnown(recipe, options)
 end
 
 local function shouldEvaluateRecipe(recipe, options)
+  if not isRecipeKnown(recipe, options)
+    and SPP.Data:IsSeasonalRecipe(recipe, options.maxExpansion or 2, options.maxPhase or 9) then
+    return false
+  end
   return isRecipeKnown(recipe, options)
     or SPP.Data:IsCommonRecipe(recipe, options.maxExpansion or 2, options.maxPhase or 9)
+    or SPP.Data:IsVendorRecipe(recipe, options.maxExpansion or 2, options.maxPhase or 9)
     or options.includeRareRecipes
 end
 
@@ -210,17 +216,36 @@ end
 local function getRecipeAccess(recipe, options, acquiredRecipes)
   local spellId = recipe[SPP.R.SPELL]
   if isRecipeKnown(recipe, options) then return true end
-  if SPP.Data:IsCommonRecipe(recipe, options.maxExpansion or 2, options.maxPhase or 9) then return true end
-  if not options.includeRareRecipes then return false end
-  local recipeItem = recipe[SPP.R.RECIPE_ITEM]
-  if not recipeItem then return false end
   if acquiredRecipes[spellId] then return true end
+  local maxExpansion, maxPhase = options.maxExpansion or 2, options.maxPhase or 9
+  local recipeItem = recipe[SPP.R.RECIPE_ITEM]
+  if SPP.Data:IsSeasonalRecipe(recipe, maxExpansion, maxPhase) then
+    return false, recipeItem, nil, "seasonal"
+  end
+  if SPP.Data:IsCommonRecipe(recipe, maxExpansion, maxPhase) then
+    return true, nil, nil, "trainer"
+  end
+  if SPP.Data:IsVendorRecipe(recipe, maxExpansion, maxPhase) then
+    if recipeItem and options.inventory and (options.inventory[recipeItem] or 0) >= 1 then
+      return true, nil, nil, "owned", recipeItem
+    end
+    local limited = SPP.Data:IsLimitedVendorRecipe(recipe, maxExpansion, maxPhase)
+    local stock = recipeItem and ColeProfessionPlannerDB and ColeProfessionPlannerDB.vendorRecipeStock
+      and ColeProfessionPlannerDB.vendorRecipeStock[recipeItem] or nil
+    local freshStock = stock and currentTime() - (stock.checkedAt or 0) <= VENDOR_STOCK_TTL_SECONDS
+    if not limited or (freshStock and stock.available) then
+      return true, recipeItem, SPP.Data:GetVendorPrice(recipeItem) or 0, "vendor", recipeItem
+    end
+  end
+  if not options.includeRareRecipes then return false, recipeItem end
+  if not recipeItem then return false end
   local available, price
   if SPP.Auctionator and SPP.Auctionator.IsItemCurrentlyAvailable then
     available, price = SPP.Auctionator:IsItemCurrentlyAvailable(recipeItem)
   end
-  if available and price then return true, recipeItem, price end
-  return false, recipeItem
+  if available and price then return true, recipeItem, price, "auction", recipeItem end
+  local kind = SPP.Data:IsVendorRecipe(recipe, maxExpansion, maxPhase) and "vendor-unconfirmed" or "auction"
+  return false, recipeItem, nil, kind, recipeItem
 end
 
 local function getNextRecipeUnlock(recipes, skill, targetSkill, options, acquiredRecipes)
@@ -322,14 +347,16 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
   local craftedStock = {}
   local inventoryStock = SPP.Inventory:Copy(options.inventory)
   local previousRecipe, inventoryApplied = nil, false
-  local acquiredRecipes, opportunityMap, retiredRecipes = {}, {}, {}
+  local acquiredRecipes, opportunityMap, seasonalMap, retiredRecipes = {}, {}, {}, {}
   local skill = startSkill
   while skill < targetSkill do
     local mandatoryRecipe, nextMandatorySkill = getMandatoryProgression(
       recipes, skill, targetSkill, craftedStock, inventoryStock, options
     )
     if mandatoryRecipe then
-      local allowed, acquisitionItem, acquisitionCost = getRecipeAccess(mandatoryRecipe, options, acquiredRecipes)
+      local allowed, acquisitionItem, acquisitionCost, acquisitionKind, recipeItem = getRecipeAccess(
+        mandatoryRecipe, options, acquiredRecipes
+      )
       if not allowed then
         local recipeItem = mandatoryRecipe[SPP.R.RECIPE_ITEM]
         return nil, "Required progression recipe is unavailable: " .. mandatoryRecipe[SPP.R.NAME],
@@ -353,8 +380,8 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
       if acquisitionItem then
         shopping[acquisitionItem] = (shopping[acquisitionItem] or 0) + 1
         stepMaterials[acquisitionItem] = (stepMaterials[acquisitionItem] or 0) + 1
-        acquiredRecipes[mandatoryRecipe[SPP.R.SPELL]] = true
       end
+      if acquisitionKind then acquiredRecipes[mandatoryRecipe[SPP.R.SPELL]] = true end
       local craftSeconds, craftTimeEstimated = getRecipeCraftTime(mandatoryRecipe)
       local stepEnd = math.min(targetSkill, skill + 1)
       table.insert(steps, {
@@ -369,6 +396,8 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
         craftTimeEstimated = craftTimeEstimated,
         usedInventory = stepUsedInventory,
         acquisitionItem = acquisitionItem,
+        acquisitionKind = acquisitionKind,
+        recipeItem = recipeItem,
         mandatory = true
       })
       total = total + reagentCost + (acquisitionCost or 0)
@@ -388,7 +417,9 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
           recipe, skill, blockTargetSkill, craftedStock, inventoryStock, options
         )
         if block then
-            local allowed, acquisitionItem, acquisitionCost = getRecipeAccess(recipe, options, acquiredRecipes)
+            local allowed, acquisitionItem, acquisitionCost, acquisitionKind, recipeItem = getRecipeAccess(
+              recipe, options, acquiredRecipes
+            )
             if allowed then
               local totalExpectedCost = block.reagentCost + (acquisitionCost or 0)
               local craftSecondsPerCast = getRecipeCraftTime(recipe)
@@ -399,6 +430,7 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
                 craftedStock = block.craftedStock, inventoryStock = block.inventoryStock,
                 shopping = block.shopping, usedInventory = block.usedInventory,
                 acquisitionItem = acquisitionItem, acquisitionCost = acquisitionCost,
+                acquisitionKind = acquisitionKind, recipeItem = recipeItem,
                 score = block.score + ((acquisitionCost or 0) / block.covered),
                 fastScore = (block.expectedCrafts * craftSecondsPerCast) / block.covered
               }
@@ -409,11 +441,13 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
               elseif isBetterCandidate(candidate, best, routeMode) then
                 best = candidate
               end
+            elseif acquisitionKind == "seasonal" then
+              seasonalMap[recipe[SPP.R.SPELL]] = recipe
             elseif acquisitionItem and options.includeRareRecipes then
               rareCandidates = rareCandidates or {}
               table.insert(rareCandidates, {
                 recipe = recipe, itemId = acquisitionItem, expectedCost = block.reagentCost,
-                score = block.score, covered = block.covered
+                score = block.score, covered = block.covered, acquisitionKind = acquisitionKind
               })
             end
         elseif missingItem then
@@ -452,7 +486,8 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
         if not entry then
           entry = {
             itemId = opportunity.itemId, recipe = opportunity.recipe,
-            fromSkill = skill, toSkill = skill + comparablePoints, estimatedSavings = 0
+            fromSkill = skill, toSkill = skill + comparablePoints, estimatedSavings = 0,
+            acquisitionKind = opportunity.acquisitionKind
           }
           opportunityMap[opportunity.itemId] = entry
         end
@@ -471,8 +506,8 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
     if best.acquisitionItem then
       shopping[best.acquisitionItem] = (shopping[best.acquisitionItem] or 0) + 1
       stepMaterials[best.acquisitionItem] = (stepMaterials[best.acquisitionItem] or 0) + 1
-      acquiredRecipes[best.recipe[SPP.R.SPELL]] = true
     end
+    if best.acquisitionKind then acquiredRecipes[best.recipe[SPP.R.SPELL]] = true end
     inventoryApplied = inventoryApplied or best.usedInventory
     local blockEnd = skill + best.covered
     local craftSecondsPerCast, craftTimeEstimated = getRecipeCraftTime(best.recipe)
@@ -487,6 +522,8 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
       mergeShopping(previous.materials, stepMaterials)
       previous.usedInventory = previous.usedInventory or best.usedInventory
       previous.acquisitionItem = previous.acquisitionItem or best.acquisitionItem
+      previous.acquisitionKind = previous.acquisitionKind or best.acquisitionKind
+      previous.recipeItem = previous.recipeItem or best.recipeItem
     else
       table.insert(steps, {
         recipe = best.recipe,
@@ -499,7 +536,9 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
         craftSeconds = blockCraftSeconds,
         craftTimeEstimated = craftTimeEstimated,
         usedInventory = best.usedInventory,
-        acquisitionItem = best.acquisitionItem
+        acquisitionItem = best.acquisitionItem,
+        acquisitionKind = best.acquisitionKind,
+        recipeItem = best.recipeItem
       })
     end
     total = total + best.expectedCost
@@ -510,6 +549,9 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
   local recipeOpportunities = {}
   for _, opportunity in pairs(opportunityMap) do table.insert(recipeOpportunities, opportunity) end
   table.sort(recipeOpportunities, function(a, b) return a.estimatedSavings > b.estimatedSavings end)
+  local seasonalExclusions = {}
+  for _, recipe in pairs(seasonalMap) do table.insert(seasonalExclusions, recipe) end
+  table.sort(seasonalExclusions, function(a, b) return a[SPP.R.LEARN] < b[SPP.R.LEARN] end)
   local skippedMissingPriceCount = 0
   for _ in pairs(skippedMissingItems) do skippedMissingPriceCount = skippedMissingPriceCount + 1 end
   return {
@@ -519,6 +561,7 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
     totalCost = total, steps = steps, shopping = shopping, usedInventory = inventoryApplied,
     refreshShopping = refreshShopping,
     recipeOpportunities = recipeOpportunities,
+    seasonalExclusions = seasonalExclusions,
     skippedMissingPriceCount = skippedMissingPriceCount,
     calculatedAt = currentTime(),
     selection = routeMode == "fast"
@@ -552,7 +595,8 @@ function SPP.Planner:SerializePlan(plan)
     selection = plan.selection,
     shopping = copyNumberMap(plan.shopping),
     steps = {},
-    recipeOpportunities = {}
+    recipeOpportunities = {},
+    seasonalExclusions = {}
   }
   for _, step in ipairs(plan.steps or {}) do
     table.insert(saved.steps, {
@@ -567,6 +611,8 @@ function SPP.Planner:SerializePlan(plan)
       craftTimeEstimated = step.craftTimeEstimated,
       usedInventory = step.usedInventory,
       acquisitionItem = step.acquisitionItem,
+      acquisitionKind = step.acquisitionKind,
+      recipeItem = step.recipeItem,
       mandatory = step.mandatory
     })
   end
@@ -576,8 +622,12 @@ function SPP.Planner:SerializePlan(plan)
       itemId = opportunity.itemId,
       fromSkill = opportunity.fromSkill,
       toSkill = opportunity.toSkill,
-      estimatedSavings = opportunity.estimatedSavings
+      estimatedSavings = opportunity.estimatedSavings,
+      acquisitionKind = opportunity.acquisitionKind
     })
+  end
+  for _, recipe in ipairs(plan.seasonalExclusions or {}) do
+    table.insert(saved.seasonalExclusions, recipe[SPP.R.SPELL])
   end
   return saved
 end
@@ -603,6 +653,7 @@ function SPP.Planner:RestorePlan(saved)
     shopping = copyNumberMap(saved.shopping),
     steps = {},
     recipeOpportunities = {},
+    seasonalExclusions = {},
     restored = true
   }
   for _, savedStep in ipairs(saved.steps or {}) do
@@ -620,6 +671,8 @@ function SPP.Planner:RestorePlan(saved)
       craftTimeEstimated = savedStep.craftTimeEstimated,
       usedInventory = savedStep.usedInventory,
       acquisitionItem = savedStep.acquisitionItem,
+      acquisitionKind = savedStep.acquisitionKind,
+      recipeItem = savedStep.recipeItem,
       mandatory = savedStep.mandatory
     })
   end
@@ -631,9 +684,13 @@ function SPP.Planner:RestorePlan(saved)
         itemId = savedOpportunity.itemId,
         fromSkill = savedOpportunity.fromSkill,
         toSkill = savedOpportunity.toSkill,
-        estimatedSavings = savedOpportunity.estimatedSavings
+        estimatedSavings = savedOpportunity.estimatedSavings,
+        acquisitionKind = savedOpportunity.acquisitionKind
       })
     end
+  end
+  for _, spellId in ipairs(saved.seasonalExclusions or {}) do
+    if recipesBySpell[spellId] then table.insert(plan.seasonalExclusions, recipesBySpell[spellId]) end
   end
   return plan
 end

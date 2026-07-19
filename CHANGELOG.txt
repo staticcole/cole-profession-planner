@@ -1,6 +1,16 @@
 COLE PROFESSION PLANNER CHANGELOG
 =================================
 
+0.9.14-tbc
+----------
+
+- Stopped unknown seasonal recipes from entering leveling routes until the character has learned them.
+- Required fresh in-game stock confirmation before using limited vendor recipes such as Schematic: Red Firework.
+- Added automatic limited-recipe stock scans when opening or updating the relevant merchant window.
+- Added a Recipe options window for mapped vendors, auction alternatives, savings and blocked seasonal acquisitions.
+- Added explicit Buy recipe, Learn recipe and Train recipe requirements to route rows and tooltips.
+- Corrected Large Blue Rocket to its Lunar Festival, level 35, 5 Coins of Ancestry, Bind-on-Pickup acquisition.
+
 0.9.13-tbc
 ----------
 

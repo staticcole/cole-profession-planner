@@ -113,7 +113,7 @@ function SPP.Auctionator:GetShoppingRows(plan, auctionOnly)
     if quantity > 0.001 then
       local name = SPP.Data:GetItemName(itemId)
       local vendorPrice = SPP.Data:GetVendorPrice(itemId)
-      if auctionOnly and vendorPrice then
+      if auctionOnly and vendorPrice and not plan.recipeOpportunityScan then
         -- Profession supplies have a fixed vendor price and never belong in an AH scan.
       elseif name == "Item " .. tostring(itemId) then
         table.insert(unresolved, itemId)
