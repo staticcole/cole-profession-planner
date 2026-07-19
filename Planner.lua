@@ -389,7 +389,9 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
       end
       if acquisitionKind then acquiredRecipes[mandatoryRecipe[SPP.R.SPELL]] = true end
       local craftSeconds, craftTimeEstimated = getRecipeCraftTime(mandatoryRecipe)
-      local stepEnd = math.min(targetSkill, skill + 1)
+      local skillupChance = SPP.Data:GetSkillupChance(mandatoryRecipe, skill)
+      local skillGain = skillupChance >= 0.999 and 1 or 0
+      local stepEnd = math.min(targetSkill, skill + skillGain)
       table.insert(steps, {
         recipe = mandatoryRecipe,
         fromSkill = skill,
@@ -404,7 +406,8 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
         acquisitionItem = acquisitionItem,
         acquisitionKind = acquisitionKind,
         recipeItem = recipeItem,
-        mandatory = true
+        mandatory = true,
+        skillGain = skillGain
       })
       total = total + reagentCost + (acquisitionCost or 0)
       inventoryApplied = inventoryApplied or stepUsedInventory
@@ -625,7 +628,8 @@ function SPP.Planner:SerializePlan(plan)
       acquisitionItem = step.acquisitionItem,
       acquisitionKind = step.acquisitionKind,
       recipeItem = step.recipeItem,
-      mandatory = step.mandatory
+      mandatory = step.mandatory,
+      skillGain = step.skillGain
     })
   end
   for _, opportunity in ipairs(plan.recipeOpportunities or {}) do
@@ -695,7 +699,9 @@ function SPP.Planner:RestorePlan(saved)
       acquisitionItem = savedStep.acquisitionItem,
       acquisitionKind = savedStep.acquisitionKind,
       recipeItem = savedStep.recipeItem,
-      mandatory = savedStep.mandatory
+      mandatory = savedStep.mandatory,
+      skillGain = savedStep.skillGain ~= nil and savedStep.skillGain
+        or math.max(0, (savedStep.toSkill or savedStep.fromSkill or 0) - (savedStep.fromSkill or 0))
     })
   end
   for _, savedOpportunity in ipairs(saved.recipeOpportunities or {}) do

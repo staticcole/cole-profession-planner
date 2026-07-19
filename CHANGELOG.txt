@@ -1,6 +1,14 @@
 COLE PROFESSION PLANNER CHANGELOG
 =================================
 
+0.9.17-tbc
+----------
+
+- Stopped gray, green and yellow mandatory Runed Rod crafts from being counted as guaranteed skill points.
+- Kept each missing rod as a required one-craft prerequisite without shifting the real leveling range.
+- Continued to count an orange mandatory rod as one guaranteed skill point.
+- Added explicit same-skill craft labels and preserved skill-gain state in saved routes.
+
 0.9.16-tbc
 ----------
 

@@ -285,6 +285,7 @@ function SPP.UI:CreatePlanRow(parent, index)
   row.skill = label(row, "")
   row.skill:SetPoint("LEFT", 34, 0)
   row.skill:SetWidth(58)
+  constrainFontString(row.skill, 14, 1, false)
   row.icon = row:CreateTexture(nil, "ARTWORK")
   row.icon:SetSize(26, 26)
   row.icon:SetPoint("LEFT", 3, 0)
@@ -303,10 +304,12 @@ function SPP.UI:CreatePlanRow(parent, index)
   row.crafts:SetPoint("RIGHT", -151, 0)
   row.crafts:SetWidth(42)
   row.crafts:SetJustifyH("RIGHT")
+  constrainFontString(row.crafts, 14, 1, false)
   row.time = label(row, "")
   row.time:SetPoint("RIGHT", -99, 0)
   row.time:SetWidth(48)
   row.time:SetJustifyH("RIGHT")
+  constrainFontString(row.time, 14, 1, false)
   row.cost = label(row, "")
   row.cost:SetPoint("TOPRIGHT", -5, -5)
   row.cost:SetWidth(90)
@@ -325,7 +328,11 @@ function SPP.UI:CreatePlanRow(parent, index)
     GameTooltip:AddDoubleLine("Expected crafts", string.format("%.1f", self.step.expectedCrafts), 0.7, 0.8, 1, 1, 1, 1)
     GameTooltip:AddDoubleLine("Craft time", formatDuration(self.step.craftSeconds, self.step.craftTimeEstimated), 0.7, 0.8, 1, 1, 1, 1)
     if self.step.mandatory then
-      GameTooltip:AddLine("Required progression craft; planned exactly once.", 1, 0.82, 0.2, true)
+      if (self.step.skillGain or 0) > 0 then
+        GameTooltip:AddLine("Required progression craft; planned exactly once with a guaranteed skill-up.", 1, 0.82, 0.2, true)
+      else
+        GameTooltip:AddLine("Required progression craft; planned exactly once without assuming a skill-up at this level.", 1, 0.82, 0.2, true)
+      end
     end
     if self.step.acquisitionKind then
       GameTooltip:AddLine(" ")
@@ -1203,7 +1210,9 @@ function SPP.UI:UpdatePlanRows()
     if not step then row:Hide() else
       row.step = step
       row:Show()
-      row.skill:SetText(step.fromSkill .. " - " .. step.toSkill)
+      row.skill:SetText(step.mandatory and (step.skillGain or 0) == 0
+        and (step.fromSkill .. " craft")
+        or (step.fromSkill .. " - " .. step.toSkill))
       row.name:SetText(step.recipe[SPP.R.NAME])
       row.icon:SetTexture(recipeIcon(step.recipe))
       row.materials:SetText(formatStepMaterials(step))
