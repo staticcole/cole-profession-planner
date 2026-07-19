@@ -1,6 +1,14 @@
 COLE PROFESSION PLANNER CHANGELOG
 =================================
 
+0.9.16-tbc
+----------
+
+- Rebuilt leveling rows with fixed text bounds so recipe details cannot overlap adjacent rows.
+- Limited recipe names to one line and material summaries to two lines; full details remain in the tooltip.
+- Split cost and route flags into separate single-line fields.
+- Increased row spacing and reduced visible route rows to seven for consistent vertical rhythm.
+
 0.9.15-tbc
 ----------
 

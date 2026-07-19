@@ -6,7 +6,7 @@ local COLORS = {
 }
 local EXPANSIONS = { "Vanilla", "The Burning Crusade" }
 local PRICE_TTL_SECONDS = 30 * 60
-local VISIBLE_PLAN_ROWS = 8
+local VISIBLE_PLAN_ROWS = 7
 local VISIBLE_SHOPPING_ROWS = 10
 local BAR_RELATED_PROFESSIONS = { blacksmithing = true, engineering = true, jewelcrafting = true }
 local ROUTE_MODES = {
@@ -152,6 +152,13 @@ local function button(parent, text, width, height)
   return control
 end
 
+local function constrainFontString(fontString, height, maxLines, wordWrap)
+  fontString:SetHeight(height)
+  if fontString.SetWordWrap then fontString:SetWordWrap(wordWrap == true) end
+  if fontString.SetNonSpaceWrap then fontString:SetNonSpaceWrap(false) end
+  if fontString.SetMaxLines then fontString:SetMaxLines(maxLines) end
+end
+
 local function editBox(parent, width, numeric)
   local edit = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
   edit:SetSize(width, 22)
@@ -270,10 +277,10 @@ end
 
 function SPP.UI:CreatePlanRow(parent, index)
   local row = CreateFrame("Button", nil, parent)
-  row:SetHeight(40)
+  row:SetHeight(52)
   row:SetFrameLevel(parent:GetFrameLevel() + 1)
-  row:SetPoint("TOPLEFT", 8, -30 - ((index - 1) * 34))
-  row:SetPoint("TOPRIGHT", -8, -30 - ((index - 1) * 34))
+  row:SetPoint("TOPLEFT", 8, -30 - ((index - 1) * 58))
+  row:SetPoint("TOPRIGHT", -8, -30 - ((index - 1) * 58))
   row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
   row.skill = label(row, "")
   row.skill:SetPoint("LEFT", 34, 0)
@@ -283,13 +290,15 @@ function SPP.UI:CreatePlanRow(parent, index)
   row.icon:SetPoint("LEFT", 3, 0)
   row.name = label(row, "")
   row.name:SetPoint("TOPLEFT", 94, -3)
-  row.name:SetPoint("RIGHT", -199, 0)
+  row.name:SetPoint("TOPRIGHT", -199, -3)
   row.name:SetJustifyH("LEFT")
+  constrainFontString(row.name, 14, 1, false)
   row.materials = label(row, "", "GameFontDisableSmall")
-  row.materials:SetPoint("BOTTOMLEFT", 94, 3)
-  row.materials:SetPoint("RIGHT", -199, 0)
+  row.materials:SetPoint("TOPLEFT", 94, -20)
+  row.materials:SetPoint("TOPRIGHT", -199, -20)
   row.materials:SetJustifyH("LEFT")
   row.materials:SetTextColor(0.68, 0.74, 0.68)
+  constrainFontString(row.materials, 28, 2, true)
   row.crafts = label(row, "")
   row.crafts:SetPoint("RIGHT", -151, 0)
   row.crafts:SetWidth(42)
@@ -299,9 +308,15 @@ function SPP.UI:CreatePlanRow(parent, index)
   row.time:SetWidth(48)
   row.time:SetJustifyH("RIGHT")
   row.cost = label(row, "")
-  row.cost:SetPoint("RIGHT", -5, 0)
+  row.cost:SetPoint("TOPRIGHT", -5, -5)
   row.cost:SetWidth(90)
   row.cost:SetJustifyH("RIGHT")
+  constrainFontString(row.cost, 14, 1, false)
+  row.flags = label(row, "", "GameFontDisableSmall")
+  row.flags:SetPoint("BOTTOMRIGHT", -5, 5)
+  row.flags:SetWidth(94)
+  row.flags:SetJustifyH("RIGHT")
+  constrainFontString(row.flags, 12, 1, false)
   row:SetScript("OnEnter", function(self)
     if not self.step then return end
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -1016,8 +1031,8 @@ function SPP.UI:Create()
   for i = 1, VISIBLE_PLAN_ROWS do
     self.planRows[i] = self:CreatePlanRow(self.routePanel, i)
     self.planRows[i]:ClearAllPoints()
-    self.planRows[i]:SetPoint("TOPLEFT", 4, -48 - ((i - 1) * 46))
-    self.planRows[i]:SetPoint("TOPRIGHT", -4, -48 - ((i - 1) * 46))
+    self.planRows[i]:SetPoint("TOPLEFT", 4, -48 - ((i - 1) * 58))
+    self.planRows[i]:SetPoint("TOPRIGHT", -4, -48 - ((i - 1) * 58))
   end
   self.planError = label(self.routePanel, "")
   self.planError:SetPoint("BOTTOMLEFT", 6, 2)
@@ -1194,12 +1209,17 @@ function SPP.UI:UpdatePlanRows()
       row.materials:SetText(formatStepMaterials(step))
       row.crafts:SetText(string.format("%.1f", step.expectedCrafts))
       row.time:SetText(formatDuration(step.craftSeconds, step.craftTimeEstimated))
-      row.cost:SetText(SPP:FormatMoney(step.cost)
-        .. (step.usedInventory and "  |cff75c94fbags|r" or "")
-        .. (step.acquisitionItem and "  |cffffd34erecipe|r" or "")
-        .. (step.mandatory and "  |cffffd34erequired|r" or ""))
+      row.cost:SetText(SPP:FormatMoney(step.cost))
+      local flags = {}
+      if step.usedInventory then table.insert(flags, "|cff75c94fbags|r") end
+      if step.acquisitionItem then table.insert(flags, "|cffffd34erecipe|r") end
+      if step.mandatory then table.insert(flags, "|cffffd34ereq.|r") end
+      row.flags:SetText(table.concat(flags, "  "))
     end
-    if not step then row.step = nil end
+    if not step then
+      row.step = nil
+      row.flags:SetText("")
+    end
   end
   local bagSuffix = self.plan and self.plan.usedInventory and " + bags" or ""
   if self.plan and self.plan.priceDiscovery then
