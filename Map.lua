@@ -90,6 +90,8 @@ function SPP.Map:CreateSourcePicker()
   picker:SetSize(560, 440)
   picker:SetPoint("CENTER")
   picker:SetFrameStrata("FULLSCREEN_DIALOG")
+  picker:SetFrameLevel(200)
+  if picker.SetToplevel then picker:SetToplevel(true) end
   picker:SetClampedToScreen(true)
   picker:EnableMouse(true)
   picker:EnableMouseWheel(true)

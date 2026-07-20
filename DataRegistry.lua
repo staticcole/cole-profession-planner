@@ -1,7 +1,7 @@
 SPP = SPP or {}
 SPP.Data = SPP.Data or {
   professions = {}, outputs = {}, conversions = {}, conversionOutputs = {},
-  vendorRecipesByNpc = {}, recipeVendorPrices = {}, vendorRecipeItems = {}
+  vendorRecipesByNpc = {}, recipeVendorPrices = {}, vendorRecipeItems = {}, recipesByRecipeItem = {}
 }
 
 SPP.R = {
@@ -46,6 +46,7 @@ function SPP.Data:Finalize()
   wipe(self.vendorRecipesByNpc)
   wipe(self.recipeVendorPrices)
   wipe(self.vendorRecipeItems)
+  wipe(self.recipesByRecipeItem)
   for _, recipes in pairs(self.professions) do
     for _, recipe in ipairs(recipes) do
       local output = recipe[SPP.R.OUTPUT]
@@ -55,6 +56,8 @@ function SPP.Data:Finalize()
       end
       local recipeItem = recipe[SPP.R.RECIPE_ITEM]
       if recipeItem then
+        self.recipesByRecipeItem[recipeItem] = self.recipesByRecipeItem[recipeItem] or {}
+        table.insert(self.recipesByRecipeItem[recipeItem], recipe)
         for _, sourceId in ipairs(recipe[SPP.R.SOURCE] or {}) do
           local source = SPP_SOURCE_DATA and SPP_SOURCE_DATA[sourceId]
           if source and source[SPP.S.TYPE] == 2 and source[SPP.S.NPC_ID] then
@@ -205,6 +208,13 @@ end
 
 function SPP.Data:GetVendorRecipesForNpc(npcId)
   return self.vendorRecipesByNpc[npcId] or {}
+end
+
+function SPP.Data:GetRecipeByItem(itemId, profession)
+  for _, recipe in ipairs(self.recipesByRecipeItem[itemId] or {}) do
+    if not profession or recipe[SPP.R.PROFESSION] == profession then return recipe end
+  end
+  return (self.recipesByRecipeItem[itemId] or {})[1]
 end
 
 function SPP.Data:GetSourceSummary(recipe, maxExpansion, maxPhase)

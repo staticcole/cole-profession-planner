@@ -1,6 +1,15 @@
 COLE PROFESSION PLANNER CHANGELOG
 =================================
 
+0.9.18-tbc
+----------
+
+- Made recipe items in the shopping list clickable and linked them back to their profession recipe.
+- Added every required route recipe to Recipe sources, including trainer and vendor acquisitions.
+- Changed route recipe clicks to open focused How to learn details before opening a map.
+- Rebuilt Recipe acquisition as a movable, clamped, fully opaque top-level dialog.
+- Raised the trainer/vendor source picker above acquisition details and retained distance sorting.
+
 0.9.17-tbc
 ----------
 

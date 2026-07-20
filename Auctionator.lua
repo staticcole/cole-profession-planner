@@ -118,9 +118,10 @@ function SPP.Auctionator:GetShoppingRows(plan, auctionOnly)
       elseif name == "Item " .. tostring(itemId) then
         table.insert(unresolved, itemId)
       else
+        local recipe = SPP.Data:GetRecipeByItem(itemId, plan and plan.profession)
         table.insert(rows, {
           itemId = itemId, name = name, quantity = math.ceil(quantity),
-          vendor = vendorPrice ~= nil, vendorPrice = vendorPrice
+          vendor = vendorPrice ~= nil, vendorPrice = vendorPrice, recipe = recipe
         })
       end
     end
