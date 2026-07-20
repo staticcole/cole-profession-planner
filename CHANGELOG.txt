@@ -1,6 +1,13 @@
 COLE PROFESSION PLANNER CHANGELOG
 =================================
 
+0.9.20-tbc
+----------
+
+- Added a Skip missing reqs option for temporarily unreachable progression formulas.
+- Removed skipped formulas from route price scans and kept them visible in Recipe options.
+- Added clear fallback-route warnings and preserved the setting with saved routes.
+
 0.9.19-tbc
 ----------
 

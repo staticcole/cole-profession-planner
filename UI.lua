@@ -573,6 +573,8 @@ function SPP.UI:UpdateRecipeOptionsFrame()
       local details
       if entry.required then
         details = routeAcquisitionDetails(entry, summary)
+      elseif entry.skippedRequirement then
+        details = "Skipped manually | Turn off Skip missing reqs to restore it"
       elseif entry.seasonal then
         local requirement
         for _, source in ipairs(SPP.Data:GetAvailableSources(recipe, self.expansion, self.phase)) do
@@ -591,6 +593,7 @@ function SPP.UI:UpdateRecipeOptionsFrame()
       row.name:SetText(recipe[SPP.R.NAME])
       row.details:SetText(details)
       row.savings:SetText(entry.required and "Required"
+        or entry.skippedRequirement and "Skipped"
         or entry.estimatedSavings and ("Save ~" .. SPP:FormatMoney(entry.estimatedSavings))
         or "Blocked")
       if entry.required then
@@ -646,6 +649,9 @@ function SPP.UI:ShowRecipeOptions(focusRecipe)
   for _, recipe in ipairs(self.plan and self.plan.seasonalExclusions or {}) do
     append({ recipe = recipe, seasonal = true })
   end
+  for _, recipe in ipairs(self.plan and self.plan.skippedProgressionRecipes or {}) do
+    append({ recipe = recipe, skippedRequirement = true })
+  end
   if focusRecipe and not seen[focusRecipe[SPP.R.SPELL]] then
     append({ recipe = focusRecipe, acquisitionKind = SPP.Data:IsVendorRecipe(focusRecipe, self.expansion, self.phase)
       and "vendor" or "source", required = true })
@@ -690,6 +696,8 @@ function SPP.UI:GetPricingOptions()
     includeRareRecipes = self.includeRareRecipes and self.includeRareRecipes:GetChecked() or true,
     includeVendorRecipes = self.includeVendorRecipes and self.includeVendorRecipes:GetChecked()
       or self.includeVendorRecipesValue == true,
+    skipUnavailableProgression = self.skipUnavailableProgression and self.skipUnavailableProgression:GetChecked()
+      or self.skipUnavailableProgressionValue == true,
     routeMode = self.routeMode == "fast" and "fast" or "economy",
     knownRecipes = self.knownRecipes, availableProfessions = available
   }
@@ -750,6 +758,7 @@ function SPP.UI:LoadSavedPlan(profession)
   self.phase = plan.maxPhase or self.phase
   self.routeMode = plan.routeMode
   self.includeVendorRecipesValue = plan.includeVendorRecipes == true
+  self.skipUnavailableProgressionValue = plan.skipUnavailableProgression == true
   self.plan, self.planMessage = plan, nil
   self.planOffset, self.shoppingOffset = 0, 0
   if self.expansionMenu then
@@ -765,6 +774,9 @@ function SPP.UI:LoadSavedPlan(profession)
     UIDropDownMenu_SetText(self.routeModeMenu, self.routeMode == "fast" and ROUTE_MODES[1].label or ROUTE_MODES[2].label)
   end
   if self.includeVendorRecipes then self.includeVendorRecipes:SetChecked(self.includeVendorRecipesValue) end
+  if self.skipUnavailableProgression then
+    self.skipUnavailableProgression:SetChecked(self.skipUnavailableProgressionValue)
+  end
   if self.fromBox then self.fromBox:SetText(plan.fromSkill) end
   if self.toBox then self.toBox:SetText(plan.toSkill) end
   return true
@@ -788,6 +800,7 @@ function SPP.UI:Create()
   self.skill = knownProfessions[self.profession] and knownProfessions[self.profession].rank or 1
   self.routeMode = ColeProfessionPlannerDB.routeMode == "fast" and "fast" or "economy"
   self.includeVendorRecipesValue = ColeProfessionPlannerDB.includeVendorRecipes == true
+  self.skipUnavailableProgressionValue = ColeProfessionPlannerDB.skipUnavailableProgression == true
   self:LoadSavedPlan(ColeProfessionPlannerDB.lastPlanProfession)
 
   local frame = CreateFrame("Frame", "ColeProfessionPlannerFrame", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
@@ -1110,21 +1123,44 @@ function SPP.UI:Create()
   end)
   self.includeVendorRecipes:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
+  self.skipUnavailableProgression = CreateFrame("CheckButton", nil, self.settingsPanel, "UICheckButtonTemplate")
+  self.skipUnavailableProgression:SetSize(24, 24)
+  self.skipUnavailableProgression:SetPoint("TOPLEFT", 7, -356)
+  self.skipUnavailableProgression:SetChecked(self.skipUnavailableProgressionValue)
+  self.skipUnavailableProgressionLabel = label(self.settingsPanel, "Skip missing reqs")
+  self.skipUnavailableProgressionLabel:SetPoint("LEFT", self.skipUnavailableProgression, "RIGHT", 2, 0)
+  self.skipUnavailableProgressionLabel:SetWidth(150)
+  self.skipUnavailableProgressionLabel:SetJustifyH("LEFT")
+  self.skipUnavailableProgression:SetScript("OnClick", function(control)
+    local enabled = control:GetChecked() == true
+    self.skipUnavailableProgressionValue = enabled
+    ColeProfessionPlannerDB.skipUnavailableProgression = enabled
+    if self.plan then self:BuildPlan() end
+  end)
+  self.skipUnavailableProgression:SetScript("OnEnter", function(control)
+    GameTooltip:SetOwner(control, "ANCHOR_RIGHT")
+    GameTooltip:SetText("Skip missing required recipes")
+    GameTooltip:AddLine("Builds a fallback route without unlearned progression formulas that are not in the selected inventory.", 1, 1, 1, true)
+    GameTooltip:AddLine("Skipped requirements remain listed in Recipe options so you can restore them later.", 1, 0.82, 0.2, true)
+    GameTooltip:Show()
+  end)
+  self.skipUnavailableProgression:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
   self.buildButton = button(self.settingsPanel, "Calculate route", 188, 28)
-  self.buildButton:SetPoint("TOPLEFT", 10, -364)
+  self.buildButton:SetPoint("TOPLEFT", 10, -393)
   self.buildButton:SetScript("OnClick", function() self:BuildPlan() end)
 
   self.totalLabel = label(self.settingsPanel, "")
-  self.totalLabel:SetPoint("TOPLEFT", 10, -406)
+  self.totalLabel:SetPoint("TOPLEFT", 10, -435)
   self.totalLabel:SetWidth(190)
   self.totalLabel:SetJustifyH("LEFT")
   self.totalLabel:SetFontObject("GameFontNormal")
   self.selectionLabel = label(self.settingsPanel, "", "GameFontDisableSmall")
-  self.selectionLabel:SetPoint("TOPLEFT", 10, -429)
+  self.selectionLabel:SetPoint("TOPLEFT", 10, -458)
   self.selectionLabel:SetWidth(190)
   self.selectionLabel:SetJustifyH("LEFT")
   self.miningNote = label(self.settingsPanel, "")
-  self.miningNote:SetPoint("TOPLEFT", 10, -464)
+  self.miningNote:SetPoint("TOPLEFT", 10, -493)
   self.miningNote:SetWidth(190)
   self.miningNote:SetJustifyH("LEFT")
   self:UpdateMiningNote()
@@ -1300,9 +1336,12 @@ function SPP.UI:BuildFullRefreshPlan()
     and existingPlan.maxPhase == self.phase
     and existingPlan.routeMode == options.routeMode
     and existingPlan.includeVendorRecipes == (options.includeVendorRecipes == true)
+    and (existingPlan.skipUnavailableProgression == true) == (options.skipUnavailableProgression == true)
   return {
     profession = self.profession, fromSkill = fromSkill, toSkill = toSkill,
     maxExpansion = self.expansion, maxPhase = self.phase,
+    routeMode = options.routeMode, includeVendorRecipes = options.includeVendorRecipes == true,
+    skipUnavailableProgression = options.skipUnavailableProgression == true,
     shopping = planMatchesRange and existingPlan.shopping or {},
     refreshShopping = refreshShopping,
     recipeOpportunities = planMatchesRange and existingPlan.recipeOpportunities or {},
@@ -1366,8 +1405,15 @@ function SPP.UI:UpdatePlanRows()
       self.plan.missingPriceCount
     ))
   else
+    local skippedRequirements = self.plan and #(self.plan.skippedProgressionRecipes or {}) or 0
     local skipped = self.plan and self.plan.skippedMissingPriceCount or 0
-    if skipped > 0 then
+    if skippedRequirements > 0 then
+      self.planError:SetTextColor(1, 0.82, 0.2)
+      self.planError:SetText(string.format(
+        "Fallback route: %d required recipe%s skipped. Turn off Skip missing reqs to restore.",
+        skippedRequirements, skippedRequirements == 1 and " was" or "s were"
+      ))
+    elseif skipped > 0 then
       self.planError:SetTextColor(1, 0.82, 0.2)
       self.planError:SetText(string.format(
         "Route calculated; %d optional material price%s missing. Refresh range prices for a complete comparison.",
@@ -1484,6 +1530,12 @@ function SPP.UI:UpdateShoppingRows()
       end
     end
     local notes = {}
+    local skippedRequirementCount = #(self.plan.skippedProgressionRecipes or {})
+    if skippedRequirementCount > 0 then
+      table.insert(notes, string.format(
+        "Required recipes skipped: %d. Turn off Skip missing reqs when reachable.", skippedRequirementCount
+      ))
+    end
     if vendorCount > 0 then
       table.insert(notes, string.format("Vendor supplies: %d (excluded from Auctionator).", vendorCount))
     end
@@ -1515,7 +1567,8 @@ function SPP.UI:UpdateShoppingRows()
       requiredRecipeCount = requiredRecipeCount + 1
     end
   end
-  local opportunityCount = self.plan and (#(self.plan.recipeOpportunities or {}) + #(self.plan.seasonalExclusions or {})) or 0
+  local opportunityCount = self.plan and (#(self.plan.recipeOpportunities or {})
+    + #(self.plan.seasonalExclusions or {}) + #(self.plan.skippedProgressionRecipes or {})) or 0
   self.recipeSearchButton:SetShown(not (self.plan and self.plan.priceDiscovery))
   self.recipeSearchButton:SetText(requiredRecipeCount > 0 and ("Sources (" .. requiredRecipeCount .. ")") or "Recipe options")
   self.recipeSearchButton:SetEnabled(requiredRecipeCount + opportunityCount > 0)

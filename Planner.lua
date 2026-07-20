@@ -160,6 +160,14 @@ local function isProgressionRecipe(recipe)
   return recipe[SPP.R.MANDATORY] or recipe[SPP.R.REQUIRED]
 end
 
+local function shouldSkipProgressionRecipe(recipe, options)
+  if not isProgressionRecipe(recipe) or not options.skipUnavailableProgression
+    or not recipe[SPP.R.RECIPE_ITEM] then return false end
+  if isRecipeKnown(recipe, options) then return false end
+  local recipeItem = recipe[SPP.R.RECIPE_ITEM]
+  return not options.inventory or (options.inventory[recipeItem] or 0) < 1
+end
+
 local function getMandatoryProgression(recipes, skill, targetSkill, craftedStock, inventoryStock, options)
   local completedRank = getCompletedMandatoryRank(recipes, craftedStock, inventoryStock)
   local dueRecipe, nextSkill
@@ -169,7 +177,8 @@ local function getMandatoryProgression(recipes, skill, targetSkill, craftedStock
     local learn = recipe[SPP.R.LEARN]
     local missingRequiredCraft = requiredCraft and not hasRequiredCraft(recipe, craftedStock, inventoryStock)
     local missingRank = rank and rank > completedRank
-    if (missingRequiredCraft or missingRank) and learn < targetSkill
+    if not shouldSkipProgressionRecipe(recipe, options)
+      and (missingRequiredCraft or missingRank) and learn < targetSkill
       and SPP.Data:IsAvailable(
         recipe[SPP.R.EXPANSION], recipe[SPP.R.PHASE], options.maxExpansion or 2, options.maxPhase or 9
       ) then
@@ -293,11 +302,13 @@ function SPP.Planner:BuildRefreshShopping(profession, startSkill, targetSkill, o
   for _, recipe in ipairs(recipes) do
     local overlaps, firstSkill, lastSkillExclusive = recipeOverlapsSkillRange(recipe, startSkill, targetSkill)
     local mandatoryRank = recipe[SPP.R.MANDATORY]
+    local skipProgression = shouldSkipProgressionRecipe(recipe, options)
     local requiredCraft = recipe[SPP.R.REQUIRED]
       and not hasRequiredCraft(recipe, {}, options.inventory or {})
       and recipe[SPP.R.LEARN] < targetSkill
-    local mandatory = (mandatoryRank and mandatoryRank > completedMandatoryRank
+    local mandatory = not skipProgression and ((mandatoryRank and mandatoryRank > completedMandatoryRank
       and recipe[SPP.R.LEARN] < targetSkill) or requiredCraft
+    )
     local eligible = mandatory or (not isProgressionRecipe(recipe) and overlaps)
     if eligible and SPP.Data:IsAvailable(
       recipe[SPP.R.EXPANSION], recipe[SPP.R.PHASE], options.maxExpansion or 2, options.maxPhase or 9
@@ -373,6 +384,16 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
   local inventoryStock = SPP.Inventory:Copy(options.inventory)
   local previousRecipe, inventoryApplied = nil, false
   local acquiredRecipes, opportunityMap, seasonalMap, retiredRecipes = {}, {}, {}, {}
+  local skippedProgressionRecipes = {}
+  local completedMandatoryRank = getCompletedMandatoryRank(recipes, {}, inventoryStock)
+  for _, recipe in ipairs(recipes) do
+    local rank = recipe[SPP.R.MANDATORY]
+    if isProgressionRecipe(recipe) and recipe[SPP.R.LEARN] < targetSkill
+      and shouldSkipProgressionRecipe(recipe, options)
+      and (not rank or rank > completedMandatoryRank) then
+      table.insert(skippedProgressionRecipes, recipe)
+    end
+  end
   local skill = startSkill
   while skill < targetSkill do
     local mandatoryRecipe, nextMandatorySkill = getMandatoryProgression(
@@ -590,16 +611,19 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
     maxExpansion = options.maxExpansion or 2, maxPhase = options.maxPhase or 9,
     routeMode = routeMode,
     includeVendorRecipes = options.includeVendorRecipes == true,
+    skipUnavailableProgression = options.skipUnavailableProgression == true,
     totalCost = total, steps = steps, shopping = shopping, usedInventory = inventoryApplied,
     refreshShopping = refreshShopping,
     recipeOpportunities = recipeOpportunities,
     seasonalExclusions = seasonalExclusions,
+    skippedProgressionRecipes = skippedProgressionRecipes,
     skippedMissingPriceCount = skippedMissingPriceCount,
     calculatedAt = currentTime(),
     selection = (routeMode == "fast"
       and string.format("Fast: up to %d-point blocks, %d%% faster to switch", BLOCK_SKILL_POINTS, math.floor(FAST_SWITCH_THRESHOLD * 100 + 0.5))
       or string.format("Economy: up to %d-point blocks, %d%% minimum savings to switch", BLOCK_SKILL_POINTS, math.floor(SWITCH_SAVINGS_THRESHOLD * 100 + 0.5)))
       .. (options.includeVendorRecipes and " | vendor trips allowed" or " | no vendor travel")
+      .. (#skippedProgressionRecipes > 0 and " | missing requirements skipped" or "")
   }
 end
 
@@ -622,6 +646,7 @@ function SPP.Planner:SerializePlan(plan)
     maxPhase = plan.maxPhase,
     routeMode = plan.routeMode,
     includeVendorRecipes = plan.includeVendorRecipes == true,
+    skipUnavailableProgression = plan.skipUnavailableProgression == true,
     totalCost = plan.totalCost,
     usedInventory = plan.usedInventory,
     skippedMissingPriceCount = plan.skippedMissingPriceCount,
@@ -630,8 +655,12 @@ function SPP.Planner:SerializePlan(plan)
     shopping = copyNumberMap(plan.shopping),
     steps = {},
     recipeOpportunities = {},
-    seasonalExclusions = {}
+    seasonalExclusions = {},
+    skippedProgressionRecipes = {}
   }
+  for _, recipe in ipairs(plan.skippedProgressionRecipes or {}) do
+    table.insert(saved.skippedProgressionRecipes, recipe[SPP.R.SPELL])
+  end
   for _, step in ipairs(plan.steps or {}) do
     table.insert(saved.steps, {
       spellId = step.recipe and step.recipe[SPP.R.SPELL],
@@ -690,6 +719,7 @@ function SPP.Planner:RestorePlan(saved)
     maxPhase = saved.maxPhase,
     routeMode = saved.routeMode == "fast" and "fast" or "economy",
     includeVendorRecipes = includeVendorRecipes,
+    skipUnavailableProgression = saved.skipUnavailableProgression == true,
     totalCost = saved.totalCost,
     usedInventory = saved.usedInventory,
     skippedMissingPriceCount = saved.skippedMissingPriceCount or 0,
@@ -699,6 +729,7 @@ function SPP.Planner:RestorePlan(saved)
     steps = {},
     recipeOpportunities = {},
     seasonalExclusions = {},
+    skippedProgressionRecipes = {},
     restored = true
   }
   for _, savedStep in ipairs(saved.steps or {}) do
@@ -738,6 +769,9 @@ function SPP.Planner:RestorePlan(saved)
   end
   for _, spellId in ipairs(saved.seasonalExclusions or {}) do
     if recipesBySpell[spellId] then table.insert(plan.seasonalExclusions, recipesBySpell[spellId]) end
+  end
+  for _, spellId in ipairs(saved.skippedProgressionRecipes or {}) do
+    if recipesBySpell[spellId] then table.insert(plan.skippedProgressionRecipes, recipesBySpell[spellId]) end
   end
   return plan
 end
