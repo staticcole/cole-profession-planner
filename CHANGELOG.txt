@@ -1,6 +1,14 @@
 COLE PROFESSION PLANNER CHANGELOG
 =================================
 
+0.9.22-tbc
+----------
+
+- Added a movable Cole Craft List manager for recipes selected in profession windows.
+- Added per-recipe craft counts, material previews, increment, decrement and remove controls.
+- Added Add selected recipe, Clear all and Search in Auctionator actions to the manager.
+- Preserved material-only lists created by 0.9.21 as a removable imported entry.
+
 0.9.21-tbc
 ----------
 

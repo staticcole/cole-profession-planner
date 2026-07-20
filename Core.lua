@@ -99,9 +99,7 @@ local function slashCommand(message)
       local _, message = SPP.CraftList:OpenAtAuctionHouse()
       print("|cff75c94fCole:|r " .. message)
     else
-      local itemCount, unitCount = SPP.CraftList:GetStats()
-      print(string.format("|cff75c94fCole:|r %s: %d materials, %d total units", SPP.CraftList:GetListName(), itemCount, unitCount))
-      print("  /cole list search  |  /cole list clear")
+      SPP.CraftList:OpenManager()
     end
   elseif command == "pricecheck" then
     local itemId = tonumber(rest)
@@ -187,6 +185,7 @@ addon:SetScript("OnEvent", function(_, event, name)
     ColeProfessionPlannerDB.savedPlans = ColeProfessionPlannerDB.savedPlans or {}
     ColeProfessionPlannerDB.vendorRecipeStock = ColeProfessionPlannerDB.vendorRecipeStock or {}
     ColeProfessionPlannerDB.craftShopping = ColeProfessionPlannerDB.craftShopping or {}
+    SPP.CraftList:Initialize()
     ColeProfessionPlannerDB.routeMode = ColeProfessionPlannerDB.routeMode == "fast" and "fast" or "economy"
     ColeProfessionPlannerDB.includeVendorRecipes = ColeProfessionPlannerDB.includeVendorRecipes == true
     ColeProfessionPlannerDB.skipUnavailableProgression = ColeProfessionPlannerDB.skipUnavailableProgression == true
