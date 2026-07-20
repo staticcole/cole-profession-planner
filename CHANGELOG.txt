@@ -1,6 +1,13 @@
 COLE PROFESSION PLANNER CHANGELOG
 =================================
 
+0.9.19-tbc
+----------
+
+- Added Arclight Spanner and Gyromatic Micro-Adjustor as independent required Engineering crafts.
+- Planned each missing Engineering tool exactly once before the leveling recipes that need it.
+- Reused tools found in the selected bags or bank instead of crafting them again.
+
 0.9.18-tbc
 ----------
 

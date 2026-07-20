@@ -151,18 +151,34 @@ local function getCompletedMandatoryRank(recipes, craftedStock, inventoryStock)
   return completedRank
 end
 
+local function hasRequiredCraft(recipe, craftedStock, inventoryStock)
+  local output = recipe[SPP.R.OUTPUT]
+  return output and ((craftedStock[output] or 0) + (inventoryStock[output] or 0)) >= 1
+end
+
+local function isProgressionRecipe(recipe)
+  return recipe[SPP.R.MANDATORY] or recipe[SPP.R.REQUIRED]
+end
+
 local function getMandatoryProgression(recipes, skill, targetSkill, craftedStock, inventoryStock, options)
   local completedRank = getCompletedMandatoryRank(recipes, craftedStock, inventoryStock)
   local dueRecipe, nextSkill
   for _, recipe in ipairs(recipes) do
     local rank = recipe[SPP.R.MANDATORY]
+    local requiredCraft = recipe[SPP.R.REQUIRED]
     local learn = recipe[SPP.R.LEARN]
-    if rank and rank > completedRank and learn < targetSkill
+    local missingRequiredCraft = requiredCraft and not hasRequiredCraft(recipe, craftedStock, inventoryStock)
+    local missingRank = rank and rank > completedRank
+    if (missingRequiredCraft or missingRank) and learn < targetSkill
       and SPP.Data:IsAvailable(
         recipe[SPP.R.EXPANSION], recipe[SPP.R.PHASE], options.maxExpansion or 2, options.maxPhase or 9
       ) then
       if learn <= skill then
-        if not dueRecipe or rank < dueRecipe[SPP.R.MANDATORY] then dueRecipe = recipe end
+        if not dueRecipe or learn < dueRecipe[SPP.R.LEARN]
+          or (learn == dueRecipe[SPP.R.LEARN]
+            and (rank or math.huge) < (dueRecipe[SPP.R.MANDATORY] or math.huge)) then
+          dueRecipe = recipe
+        end
       elseif not nextSkill or learn < nextSkill then
         nextSkill = learn
       end
@@ -257,7 +273,7 @@ local function getNextRecipeUnlock(recipes, skill, targetSkill, options, acquire
   local nextSkill
   for _, recipe in ipairs(recipes) do
     local learn = recipe[SPP.R.LEARN]
-    if not recipe[SPP.R.MANDATORY] and learn > skill and learn < targetSkill
+    if not isProgressionRecipe(recipe) and learn > skill and learn < targetSkill
       and SPP.Data:IsAvailable(
         recipe[SPP.R.EXPANSION], recipe[SPP.R.PHASE], options.maxExpansion or 2, options.maxPhase or 9
       ) then
@@ -277,9 +293,12 @@ function SPP.Planner:BuildRefreshShopping(profession, startSkill, targetSkill, o
   for _, recipe in ipairs(recipes) do
     local overlaps, firstSkill, lastSkillExclusive = recipeOverlapsSkillRange(recipe, startSkill, targetSkill)
     local mandatoryRank = recipe[SPP.R.MANDATORY]
-    local mandatory = mandatoryRank and mandatoryRank > completedMandatoryRank
+    local requiredCraft = recipe[SPP.R.REQUIRED]
+      and not hasRequiredCraft(recipe, {}, options.inventory or {})
       and recipe[SPP.R.LEARN] < targetSkill
-    local eligible = mandatory or (not mandatoryRank and overlaps)
+    local mandatory = (mandatoryRank and mandatoryRank > completedMandatoryRank
+      and recipe[SPP.R.LEARN] < targetSkill) or requiredCraft
+    local eligible = mandatory or (not isProgressionRecipe(recipe) and overlaps)
     if eligible and SPP.Data:IsAvailable(
       recipe[SPP.R.EXPANSION], recipe[SPP.R.PHASE], options.maxExpansion or 2, options.maxPhase or 9
     ) and shouldEvaluateRecipe(recipe, options) then
@@ -421,7 +440,7 @@ function SPP.Planner:Build(profession, startSkill, targetSkill, options)
     if nextUnlockSkill then blockTargetSkill = math.min(blockTargetSkill, nextUnlockSkill) end
     for _, recipe in ipairs(recipes) do
       if SPP.Data:IsAvailable(recipe[SPP.R.EXPANSION], recipe[SPP.R.PHASE], options.maxExpansion or 2, options.maxPhase or 9)
-        and not recipe[SPP.R.MANDATORY] and recipe[SPP.R.LEARN] <= skill then
+        and not isProgressionRecipe(recipe) and recipe[SPP.R.LEARN] <= skill then
         local block, missingItem = evaluateRecipeBlock(
           recipe, skill, blockTargetSkill, craftedStock, inventoryStock, options
         )

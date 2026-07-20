@@ -328,7 +328,9 @@ function SPP.UI:CreatePlanRow(parent, index)
     GameTooltip:AddDoubleLine("Expected crafts", string.format("%.1f", self.step.expectedCrafts), 0.7, 0.8, 1, 1, 1, 1)
     GameTooltip:AddDoubleLine("Craft time", formatDuration(self.step.craftSeconds, self.step.craftTimeEstimated), 0.7, 0.8, 1, 1, 1, 1)
     if self.step.mandatory then
-      if (self.step.skillGain or 0) > 0 then
+      if self.step.recipe[SPP.R.REQUIRED] then
+        GameTooltip:AddLine("Required reusable profession tool; planned exactly once unless it is already in the selected inventory.", 1, 0.82, 0.2, true)
+      elseif (self.step.skillGain or 0) > 0 then
         GameTooltip:AddLine("Required progression craft; planned exactly once with a guaranteed skill-up.", 1, 0.82, 0.2, true)
       else
         GameTooltip:AddLine("Required progression craft; planned exactly once without assuming a skill-up at this level.", 1, 0.82, 0.2, true)
@@ -1327,7 +1329,11 @@ function SPP.UI:UpdatePlanRows()
       local flags = {}
       if step.usedInventory then table.insert(flags, "|cff75c94fbags|r") end
       if step.acquisitionItem then table.insert(flags, "|cffffd34erecipe|r") end
-      if step.mandatory then table.insert(flags, "|cffffd34ereq.|r") end
+      if step.recipe[SPP.R.REQUIRED] then
+        table.insert(flags, "|cffffd34etool|r")
+      elseif step.mandatory then
+        table.insert(flags, "|cffffd34ereq.|r")
+      end
       row.flags:SetText(table.concat(flags, "  "))
     end
     if not step then
