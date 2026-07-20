@@ -262,7 +262,9 @@ function SPP.CraftList:OpenAtAuctionHouse()
   local created, createMessage = SPP.Auctionator:CreateList(plan, LIST_NAME)
   if not created then return false, createMessage end
   local searched, searchMessage = SPP.Auctionator:Search(plan)
-  return searched, searched and ("Opened " .. LIST_NAME .. " in Auctionator") or searchMessage
+  local recipeCount = self:GetRecipeStats()
+  return searched, searched and string.format("Opened %s in Auctionator (%d recipes, %d auction materials)",
+    LIST_NAME, recipeCount, #rows) or searchMessage
 end
 
 local function managerLabel(parent, text, template)
@@ -534,12 +536,23 @@ function SPP.CraftList:AttachProfessionButton(parent, mode)
   if not self.professionButtons[parent] then
     local control = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
     control:SetSize(94, 24)
-    control:SetText("Cole list")
+    control:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    control:SetText("+ Cole (0)")
     control.mode = mode
-    control:SetScript("OnClick", function(button) SPP.CraftList:OpenManager(button.mode) end)
+    control:SetScript("OnClick", function(button, mouseButton)
+      if mouseButton == "RightButton" then
+        SPP.CraftList:OpenManager(button.mode)
+        return
+      end
+      local ok, message = SPP.CraftList:AddSelected(button.mode)
+      print("|cff75c94fCole:|r " .. (message or (ok and "Recipe added" or "Unable to add recipe")))
+    end)
     control:SetScript("OnEnter", function(button)
       local recipe = SPP.CraftList:GetSelected(button.mode)
-      addQueueTooltip(button, recipe and ("Manage list / selected: " .. recipe.name) or "Manage " .. LIST_NAME, false)
+      addQueueTooltip(button, recipe and ("Add selected: " .. recipe.name) or LIST_NAME, false)
+      GameTooltip:AddLine("Left click: add the selected recipe", 0.45, 1, 0.45)
+      GameTooltip:AddLine("Right click: manage the list", 0.6, 0.8, 1)
+      GameTooltip:Show()
     end)
     control:SetScript("OnLeave", function() GameTooltip:Hide() end)
     self.professionButtons[parent] = control
@@ -588,7 +601,7 @@ function SPP.CraftList:UpdateButtons()
     self.auctionButton:SetEnabled(itemCount > 0)
   end
   for _, control in pairs(self.professionButtons or {}) do
-    control:SetText(string.format("Cole list (%d)", recipeCount))
+    control:SetText(string.format("+ Cole (%d)", recipeCount))
   end
   if self.auctionManageButton then self.auctionManageButton:SetText(string.format("Manage (%d)", recipeCount)) end
 end

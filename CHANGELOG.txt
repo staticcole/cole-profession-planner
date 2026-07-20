@@ -1,6 +1,14 @@
 COLE PROFESSION PLANNER CHANGELOG
 =================================
 
+0.9.24-tbc
+----------
+
+- Made left-click on + Cole immediately add the currently selected profession recipe.
+- Kept right-click on + Cole as the shortcut to the full list manager.
+- Verified that materials from multiple recipes are aggregated into one multi-search with their quantities.
+- Added recipe and auction-material counts to the Auctionator search confirmation.
+
 0.9.23-tbc
 ----------
 
