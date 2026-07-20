@@ -512,24 +512,20 @@ function SPP.CraftList:PositionProfessionButton(parent, mode)
   local control = self.professionButtons and self.professionButtons[parent]
   if not control then return end
   control:ClearAllPoints()
-  local auctionSearch = mode == "trade" and AuctionatorCraftingInfo and AuctionatorCraftingInfo.SearchButton
-  if auctionSearch then
-    control:SetPoint("RIGHT", auctionSearch, "LEFT", -4, 0)
+  local plannerButton = SPP.professionButtons and SPP.professionButtons[parent]
+  if plannerButton then
+    control:SetPoint("RIGHT", plannerButton, "LEFT", -4, 0)
   else
-    local createButton = mode == "craft" and CraftCreateButton or TradeSkillCreateButton
-    if createButton then
-      control:SetPoint("BOTTOMRIGHT", createButton, "TOPRIGHT", 0, 6)
+    local closeButton
+    if mode == "craft" then closeButton = CraftFrameCloseButton
+    else closeButton = TradeSkillFrameCloseButton or parent.CloseButton end
+    if closeButton then
+      control:SetPoint("RIGHT", closeButton, "LEFT", -34, 0)
     else
-      control:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -42, -78)
+      control:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -72, -10)
     end
   end
   control:SetFrameLevel(parent:GetFrameLevel() + 20)
-  local manage = self.professionManageButtons and self.professionManageButtons[parent]
-  if manage then
-    manage:ClearAllPoints()
-    manage:SetPoint("RIGHT", control, "LEFT", -4, 0)
-    manage:SetFrameLevel(parent:GetFrameLevel() + 20)
-  end
 end
 
 function SPP.CraftList:AttachProfessionButton(parent, mode)
@@ -537,36 +533,18 @@ function SPP.CraftList:AttachProfessionButton(parent, mode)
   self.professionButtons = self.professionButtons or {}
   if not self.professionButtons[parent] then
     local control = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-    control:SetSize(126, 24)
-    control:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    control:SetText("Add to Cole list")
+    control:SetSize(94, 24)
+    control:SetText("Cole list")
     control.mode = mode
-    control:SetScript("OnClick", function(button, mouseButton)
-      if handleClearClick(mouseButton) then return end
-      if mouseButton ~= "LeftButton" then return end
-      local ok, message = SPP.CraftList:AddSelected(button.mode)
-      print("|cff75c94fCole:|r " .. (message or (ok and "Added" or "Unable to add recipe")))
-    end)
+    control:SetScript("OnClick", function(button) SPP.CraftList:OpenManager(button.mode) end)
     control:SetScript("OnEnter", function(button)
       local recipe = SPP.CraftList:GetSelected(button.mode)
-      addQueueTooltip(button, recipe and ("Add " .. recipe.name .. " x" .. recipe.crafts) or "Cole Craft List", true)
+      addQueueTooltip(button, recipe and ("Manage list / selected: " .. recipe.name) or "Manage " .. LIST_NAME, false)
     end)
     control:SetScript("OnLeave", function() GameTooltip:Hide() end)
     self.professionButtons[parent] = control
   end
-  self.professionManageButtons = self.professionManageButtons or {}
-  if not self.professionManageButtons[parent] then
-    local manage = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-    manage:SetSize(96, 24)
-    manage:SetText("Cole list")
-    manage.mode = mode
-    manage:SetScript("OnClick", function(button) SPP.CraftList:OpenManager(button.mode) end)
-    manage:SetScript("OnEnter", function(button) addQueueTooltip(button, "Manage " .. LIST_NAME, false) end)
-    manage:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    self.professionManageButtons[parent] = manage
-  end
   self.professionButtons[parent].mode = mode
-  self.professionManageButtons[parent].mode = mode
   self.activeProfessionMode = mode
   self:PositionProfessionButton(parent, mode)
   self:UpdateButtons()
@@ -609,7 +587,7 @@ function SPP.CraftList:UpdateButtons()
     self.auctionButton:SetText(string.format("Cole list (%d)", itemCount))
     self.auctionButton:SetEnabled(itemCount > 0)
   end
-  for _, control in pairs(self.professionManageButtons or {}) do
+  for _, control in pairs(self.professionButtons or {}) do
     control:SetText(string.format("Cole list (%d)", recipeCount))
   end
   if self.auctionManageButton then self.auctionManageButton:SetText(string.format("Manage (%d)", recipeCount)) end

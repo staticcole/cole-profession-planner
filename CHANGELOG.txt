@@ -1,6 +1,13 @@
 COLE PROFESSION PLANNER CHANGELOG
 =================================
 
+0.9.23-tbc
+----------
+
+- Replaced the two profession-overlay actions with one compact Cole list button.
+- Anchored the list button to the stable planner control in the profession title bar.
+- Moved Add selected recipe into the list manager to avoid covering recipe profit and reagents.
+
 0.9.22-tbc
 ----------
 
