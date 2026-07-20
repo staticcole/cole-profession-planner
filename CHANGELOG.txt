@@ -1,6 +1,14 @@
 COLE PROFESSION PLANNER CHANGELOG
 =================================
 
+0.9.21-tbc
+----------
+
+- Added Add to Cole list buttons to TradeSkillFrame and CraftFrame recipes.
+- Added a persistent, aggregated Cole Craft List with craft-count and bag/bank handling.
+- Added a one-click Cole list button at the Auction House to create and search the Auctionator list.
+- Kept fixed-price vendor supplies out of Auctionator and added list status, tooltip and clear controls.
+
 0.9.20-tbc
 ----------
 

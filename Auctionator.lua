@@ -206,13 +206,13 @@ function SPP.Auctionator:GetSearchStrings(plan, advanced)
   return terms
 end
 
-function SPP.Auctionator:CreateList(plan)
+function SPP.Auctionator:CreateList(plan, listName)
   local api = Auctionator and Auctionator.API and Auctionator.API.v1
   if not api or not api.CreateShoppingList then return false, "Auctionator Shopping List API is unavailable" end
   local terms = self:GetSearchStrings(plan, true)
   if #terms == 0 then return false, "The route has nothing left to buy" end
   local suffix = plan.priceDiscovery and "price scan" or "materials"
-  local name = string.format("Cole: %s %s %d-%d", plan.profession, suffix, plan.fromSkill, plan.toSkill)
+  local name = listName or string.format("Cole: %s %s %d-%d", plan.profession, suffix, plan.fromSkill, plan.toSkill)
   local ok, message = pcall(api.CreateShoppingList, CALLER, name, terms)
   return ok, ok and ("Created Auctionator list: " .. name) or tostring(message)
 end

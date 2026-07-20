@@ -3,9 +3,12 @@ addon:RegisterEvent("ADDON_LOADED")
 addon:RegisterEvent("PLAYER_LOGIN")
 addon:RegisterEvent("TRADE_SKILL_SHOW")
 addon:RegisterEvent("CRAFT_SHOW")
+addon:RegisterEvent("TRADE_SKILL_UPDATE")
+addon:RegisterEvent("CRAFT_UPDATE")
 addon:RegisterEvent("SKILL_LINES_CHANGED")
 addon:RegisterEvent("MERCHANT_SHOW")
 addon:RegisterEvent("MERCHANT_UPDATE")
+addon:RegisterEvent("AUCTION_HOUSE_SHOW")
 
 local function currentTime()
   local serverTime = GetServerTime and GetServerTime() or nil
@@ -87,6 +90,19 @@ local function slashCommand(message)
     if itemId then ColeProfessionPlannerDB.manualPrices[itemId] = nil SPP.Price:ClearCache() end
   elseif command == "minimap" then
     SPP.Minimap:Show()
+  elseif command == "list" or command == "craftlist" then
+    local action = rest:lower()
+    if action == "clear" then
+      local _, message = SPP.CraftList:Clear()
+      print("|cff75c94fCole:|r " .. message)
+    elseif action == "search" then
+      local _, message = SPP.CraftList:OpenAtAuctionHouse()
+      print("|cff75c94fCole:|r " .. message)
+    else
+      local itemCount, unitCount = SPP.CraftList:GetStats()
+      print(string.format("|cff75c94fCole:|r %s: %d materials, %d total units", SPP.CraftList:GetListName(), itemCount, unitCount))
+      print("  /cole list search  |  /cole list clear")
+    end
   elseif command == "pricecheck" then
     local itemId = tonumber(rest)
     if not itemId then
@@ -170,6 +186,7 @@ addon:SetScript("OnEvent", function(_, event, name)
     ColeProfessionPlannerDB.volumePrices = ColeProfessionPlannerDB.volumePrices or {}
     ColeProfessionPlannerDB.savedPlans = ColeProfessionPlannerDB.savedPlans or {}
     ColeProfessionPlannerDB.vendorRecipeStock = ColeProfessionPlannerDB.vendorRecipeStock or {}
+    ColeProfessionPlannerDB.craftShopping = ColeProfessionPlannerDB.craftShopping or {}
     ColeProfessionPlannerDB.routeMode = ColeProfessionPlannerDB.routeMode == "fast" and "fast" or "economy"
     ColeProfessionPlannerDB.includeVendorRecipes = ColeProfessionPlannerDB.includeVendorRecipes == true
     ColeProfessionPlannerDB.skipUnavailableProgression = ColeProfessionPlannerDB.skipUnavailableProgression == true
@@ -181,6 +198,7 @@ addon:SetScript("OnEvent", function(_, event, name)
     SlashCmdList.COLEPROFESSIONPLANNER = slashCommand
   elseif event == "PLAYER_LOGIN" then
     SPP.Minimap:Create()
+    SPP.CraftList:UpdateButtons()
     SPP.Client:RecordCharacterProfessions()
     if C_Timer and C_Timer.After then C_Timer.After(1, function() SPP.Client:RecordCharacterProfessions() end) end
   elseif event == "TRADE_SKILL_SHOW" then
@@ -188,17 +206,29 @@ addon:SetScript("OnEvent", function(_, event, name)
     local parent = ProfessionsFrame or TradeSkillFrame
     local closeButton = TradeSkillFrameCloseButton or parent and parent.CloseButton
     addProfessionButton(parent, closeButton)
+    SPP.CraftList:AttachProfessionButton(parent, "trade")
     if C_Timer and C_Timer.After then
-      C_Timer.After(0, function() positionProfessionButton(parent, closeButton) end)
+      C_Timer.After(0, function()
+        positionProfessionButton(parent, closeButton)
+        SPP.CraftList:PositionProfessionButton(parent, "trade")
+      end)
     end
   elseif event == "CRAFT_SHOW" then
     SPP.UI:CacheTradeSkillIcons()
     local parent = CraftFrame
     local closeButton = CraftFrameCloseButton or parent and parent.CloseButton
     addProfessionButton(parent, closeButton)
+    SPP.CraftList:AttachProfessionButton(parent, "craft")
     if C_Timer and C_Timer.After then
-      C_Timer.After(0, function() positionProfessionButton(parent, closeButton) end)
+      C_Timer.After(0, function()
+        positionProfessionButton(parent, closeButton)
+        SPP.CraftList:PositionProfessionButton(parent, "craft")
+      end)
     end
+  elseif event == "TRADE_SKILL_UPDATE" and (ProfessionsFrame or TradeSkillFrame) then
+    SPP.CraftList:AttachProfessionButton(ProfessionsFrame or TradeSkillFrame, "trade")
+  elseif event == "CRAFT_UPDATE" and CraftFrame then
+    SPP.CraftList:AttachProfessionButton(CraftFrame, "craft")
   elseif event == "SKILL_LINES_CHANGED" then
     SPP.Client:RecordCharacterProfessions()
     if SPP.UI.frame then
@@ -207,5 +237,11 @@ addon:SetScript("OnEvent", function(_, event, name)
     end
   elseif event == "MERCHANT_SHOW" or event == "MERCHANT_UPDATE" then
     scheduleVendorRecipeScan()
+  elseif event == "AUCTION_HOUSE_SHOW" then
+    if C_Timer and C_Timer.After then
+      C_Timer.After(0, function() SPP.CraftList:AttachAuctionButton() end)
+    else
+      SPP.CraftList:AttachAuctionButton()
+    end
   end
 end)
