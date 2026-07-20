@@ -9,6 +9,7 @@ FEATURES
 
 - Price-aware profession routes with orange/yellow/green skill-up chances.
 - Quantity-aware Auctionator pricing and final shopping lists.
+- Persistent Cole Craft List with per-recipe quantities, material previews and Auctionator search.
 - Optional current-character and alt bag/bank inventory deductions.
 - Intermediate crafts, item conversions, and profession requirements.
 - Trainer, vendor, reputation, quest, and mob recipe sources.

@@ -6,7 +6,7 @@ local COLORS = {
 }
 local EXPANSIONS = { "Vanilla", "The Burning Crusade" }
 local PRICE_TTL_SECONDS = 30 * 60
-local VISIBLE_PLAN_ROWS = 8
+local VISIBLE_PLAN_ROWS = 7
 local VISIBLE_SHOPPING_ROWS = 10
 local BAR_RELATED_PROFESSIONS = { blacksmithing = true, engineering = true, jewelcrafting = true }
 local ROUTE_MODES = {
@@ -90,8 +90,17 @@ end
 
 local function formatStepMaterials(step)
   local parts = {}
+  if step and step.acquisitionKind == "trainer" then
+    table.insert(parts, "TRAIN RECIPE")
+  elseif step and step.acquisitionKind == "owned" then
+    table.insert(parts, "LEARN " .. SPP.Data:GetItemName(step.recipeItem))
+  elseif step and (step.acquisitionKind == "vendor" or step.acquisitionKind == "auction") then
+    table.insert(parts, "BUY RECIPE: " .. SPP.Data:GetItemName(step.recipeItem or step.acquisitionItem))
+  end
   for _, material in ipairs(getStepMaterialRows(step)) do
-    table.insert(parts, material.name .. " x" .. formatQuantity(material.quantity))
+    if material.itemId ~= step.acquisitionItem then
+      table.insert(parts, material.name .. " x" .. formatQuantity(material.quantity))
+    end
   end
   return #parts > 0 and table.concat(parts, ", ") or "No shopping materials"
 end
@@ -141,6 +150,13 @@ local function button(parent, text, width, height)
   control:SetSize(width, height or 22)
   control:SetText(text)
   return control
+end
+
+local function constrainFontString(fontString, height, maxLines, wordWrap)
+  fontString:SetHeight(height)
+  if fontString.SetWordWrap then fontString:SetWordWrap(wordWrap == true) end
+  if fontString.SetNonSpaceWrap then fontString:SetNonSpaceWrap(false) end
+  if fontString.SetMaxLines then fontString:SetMaxLines(maxLines) end
 end
 
 local function editBox(parent, width, numeric)
@@ -261,38 +277,49 @@ end
 
 function SPP.UI:CreatePlanRow(parent, index)
   local row = CreateFrame("Button", nil, parent)
-  row:SetHeight(40)
+  row:SetHeight(52)
   row:SetFrameLevel(parent:GetFrameLevel() + 1)
-  row:SetPoint("TOPLEFT", 8, -30 - ((index - 1) * 34))
-  row:SetPoint("TOPRIGHT", -8, -30 - ((index - 1) * 34))
+  row:SetPoint("TOPLEFT", 8, -30 - ((index - 1) * 58))
+  row:SetPoint("TOPRIGHT", -8, -30 - ((index - 1) * 58))
   row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
   row.skill = label(row, "")
   row.skill:SetPoint("LEFT", 34, 0)
   row.skill:SetWidth(58)
+  constrainFontString(row.skill, 14, 1, false)
   row.icon = row:CreateTexture(nil, "ARTWORK")
   row.icon:SetSize(26, 26)
   row.icon:SetPoint("LEFT", 3, 0)
   row.name = label(row, "")
   row.name:SetPoint("TOPLEFT", 94, -3)
-  row.name:SetPoint("RIGHT", -199, 0)
+  row.name:SetPoint("TOPRIGHT", -199, -3)
   row.name:SetJustifyH("LEFT")
+  constrainFontString(row.name, 14, 1, false)
   row.materials = label(row, "", "GameFontDisableSmall")
-  row.materials:SetPoint("BOTTOMLEFT", 94, 3)
-  row.materials:SetPoint("RIGHT", -199, 0)
+  row.materials:SetPoint("TOPLEFT", 94, -20)
+  row.materials:SetPoint("TOPRIGHT", -199, -20)
   row.materials:SetJustifyH("LEFT")
   row.materials:SetTextColor(0.68, 0.74, 0.68)
+  constrainFontString(row.materials, 28, 2, true)
   row.crafts = label(row, "")
   row.crafts:SetPoint("RIGHT", -151, 0)
   row.crafts:SetWidth(42)
   row.crafts:SetJustifyH("RIGHT")
+  constrainFontString(row.crafts, 14, 1, false)
   row.time = label(row, "")
   row.time:SetPoint("RIGHT", -99, 0)
   row.time:SetWidth(48)
   row.time:SetJustifyH("RIGHT")
+  constrainFontString(row.time, 14, 1, false)
   row.cost = label(row, "")
-  row.cost:SetPoint("RIGHT", -5, 0)
+  row.cost:SetPoint("TOPRIGHT", -5, -5)
   row.cost:SetWidth(90)
   row.cost:SetJustifyH("RIGHT")
+  constrainFontString(row.cost, 14, 1, false)
+  row.flags = label(row, "", "GameFontDisableSmall")
+  row.flags:SetPoint("BOTTOMRIGHT", -5, 5)
+  row.flags:SetWidth(94)
+  row.flags:SetJustifyH("RIGHT")
+  constrainFontString(row.flags, 12, 1, false)
   row:SetScript("OnEnter", function(self)
     if not self.step then return end
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -301,7 +328,28 @@ function SPP.UI:CreatePlanRow(parent, index)
     GameTooltip:AddDoubleLine("Expected crafts", string.format("%.1f", self.step.expectedCrafts), 0.7, 0.8, 1, 1, 1, 1)
     GameTooltip:AddDoubleLine("Craft time", formatDuration(self.step.craftSeconds, self.step.craftTimeEstimated), 0.7, 0.8, 1, 1, 1, 1)
     if self.step.mandatory then
-      GameTooltip:AddLine("Required progression craft; planned exactly once.", 1, 0.82, 0.2, true)
+      if self.step.recipe[SPP.R.REQUIRED] then
+        GameTooltip:AddLine("Required reusable profession tool; planned exactly once unless it is already in the selected inventory.", 1, 0.82, 0.2, true)
+      elseif (self.step.skillGain or 0) > 0 then
+        GameTooltip:AddLine("Required progression craft; planned exactly once with a guaranteed skill-up.", 1, 0.82, 0.2, true)
+      else
+        GameTooltip:AddLine("Required progression craft; planned exactly once without assuming a skill-up at this level.", 1, 0.82, 0.2, true)
+      end
+    end
+    if self.step.acquisitionKind then
+      GameTooltip:AddLine(" ")
+      if self.step.acquisitionKind == "trainer" then
+        GameTooltip:AddLine("Recipe must be trained before this step.", 1, 0.82, 0.2, true)
+      elseif self.step.acquisitionKind == "owned" then
+        GameTooltip:AddLine("Learn " .. SPP.Data:GetItemName(self.step.recipeItem) .. " from your inventory before this step.", 1, 0.82, 0.2, true)
+      elseif self.step.acquisitionKind == "vendor" then
+        GameTooltip:AddLine("Buy and learn " .. SPP.Data:GetItemName(self.step.recipeItem) .. " before this step.", 1, 0.82, 0.2, true)
+      elseif self.step.acquisitionKind == "auction" then
+        GameTooltip:AddLine("Buy and learn " .. SPP.Data:GetItemName(self.step.recipeItem) .. "; a fresh auction listing was confirmed.", 1, 0.82, 0.2, true)
+      end
+      for _, source in ipairs(SPP.Data:GetAvailableSources(self.step.recipe, SPP.UI.expansion, SPP.UI.phase)) do
+        GameTooltip:AddLine(SPP.Data:GetSourceText(source, false), 0.8, 0.9, 1, true)
+      end
     end
     GameTooltip:AddLine(" ")
     GameTooltip:AddLine("Shopping materials for this step", 1, 0.82, 0)
@@ -319,6 +367,11 @@ function SPP.UI:CreatePlanRow(parent, index)
     GameTooltip:Show()
   end)
   row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  row:SetScript("OnClick", function(self)
+    if self.step and self.step.acquisitionKind then
+      SPP.UI:ShowRecipeOptions(self.step.recipe)
+    end
+  end)
   row:Hide()
   return row
 end
@@ -344,8 +397,272 @@ function SPP.UI:CreateShoppingRow(parent, index)
   row.cost:SetPoint("RIGHT", -6, 0)
   row.cost:SetWidth(84)
   row.cost:SetJustifyH("RIGHT")
+  row:SetScript("OnEnter", function(self)
+    local material = self.material
+    if not material or not material.recipe then return end
+    GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+    GameTooltip:SetText(material.name, 1, 1, 1)
+    GameTooltip:AddLine("Recipe required by the leveling route.", 1, 0.82, 0.2, true)
+    GameTooltip:AddLine(SPP.Data:GetSourceSummary(material.recipe, SPP.UI.expansion, SPP.UI.phase), 0.8, 0.9, 1, true)
+    GameTooltip:AddLine("Click to see every source and map location.", 0.45, 1, 0.45, true)
+    GameTooltip:Show()
+  end)
+  row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  row:SetScript("OnClick", function(self)
+    if self.material and self.material.recipe then SPP.UI:ShowRecipeOptions(self.material.recipe) end
+  end)
   row:Hide()
   return row
+end
+
+function SPP.UI:CreateRecipeOptionsFrame()
+  if self.recipeOptionsFrame then return self.recipeOptionsFrame end
+  local frame = CreateFrame("Frame", "ColeProfessionPlannerRecipeOptionsFrame", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
+  frame:SetSize(700, 430)
+  frame:SetPoint("CENTER")
+  frame:SetFrameStrata("FULLSCREEN_DIALOG")
+  frame:SetFrameLevel(100)
+  frame:SetClampedToScreen(true)
+  frame:SetMovable(true)
+  frame:EnableMouse(true)
+  frame:RegisterForDrag("LeftButton")
+  frame:SetScript("OnDragStart", frame.StartMoving)
+  frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+  if frame.SetToplevel then frame:SetToplevel(true) end
+  frame:SetBackdrop({
+    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border", edgeSize = 24,
+    insets = { left = 8, right = 8, top = 8, bottom = 8 }
+  })
+  frame:SetBackdropColor(0.025, 0.03, 0.025, 1)
+  frame:SetBackdropBorderColor(0.45, 0.48, 0.42, 1)
+  local solidBackground = frame:CreateTexture(nil, "BACKGROUND")
+  solidBackground:SetPoint("TOPLEFT", 9, -9)
+  solidBackground:SetPoint("BOTTOMRIGHT", -9, 9)
+  solidBackground:SetTexture("Interface\\Buttons\\WHITE8X8")
+  solidBackground:SetVertexColor(0.008, 0.012, 0.008, 1)
+  frame.solidBackground = solidBackground
+  frame:EnableMouseWheel(true)
+  frame:SetScript("OnMouseWheel", function(_, delta)
+    local count = #(self.recipeOptionEntries or {})
+    self.recipeOptionOffset = math.max(0, math.min(math.max(0, count - 6), (self.recipeOptionOffset or 0) - delta))
+    self:UpdateRecipeOptionsFrame()
+  end)
+  local title = label(frame, "Recipe acquisition", "GameFontNormalLarge")
+  title:SetPoint("TOPLEFT", 18, -16)
+  title:SetPoint("TOPRIGHT", -42, -16)
+  title:SetJustifyH("LEFT")
+  constrainFontString(title, 20, 1, false)
+  frame.title = title
+  frame.subtitle = label(frame, "Required route recipes first; choose Sources for trainers, vendors and distances.", "GameFontHighlightSmall")
+  frame.subtitle:SetPoint("TOPLEFT", 18, -42)
+  frame.subtitle:SetPoint("TOPRIGHT", -18, -42)
+  frame.subtitle:SetJustifyH("LEFT")
+  constrainFontString(frame.subtitle, 16, 1, false)
+  local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
+  close:SetPoint("TOPRIGHT", -5, -5)
+  frame.rows = {}
+  for index = 1, 6 do
+    local row = CreateFrame("Frame", nil, frame)
+    row:SetHeight(48)
+    row:SetPoint("TOPLEFT", 16, -70 - ((index - 1) * 50))
+    row:SetPoint("TOPRIGHT", -16, -70 - ((index - 1) * 50))
+    row.background = row:CreateTexture(nil, "BACKGROUND")
+    row.background:SetAllPoints()
+    row.background:SetTexture("Interface\\Buttons\\WHITE8X8")
+    row.background:SetVertexColor(index % 2 == 0 and 0.065 or 0.035, index % 2 == 0 and 0.075 or 0.045, index % 2 == 0 and 0.065 or 0.035, 1)
+    row.icon = row:CreateTexture(nil, "ARTWORK")
+    row.icon:SetSize(30, 30)
+    row.icon:SetPoint("LEFT", 2, 0)
+    row.name = label(row, "")
+    row.name:SetPoint("TOPLEFT", 40, -3)
+    row.name:SetPoint("TOPRIGHT", -220, -3)
+    row.name:SetJustifyH("LEFT")
+    constrainFontString(row.name, 14, 1, false)
+    row.details = label(row, "", "GameFontDisableSmall")
+    row.details:SetPoint("TOPLEFT", 40, -20)
+    row.details:SetPoint("TOPRIGHT", -100, -20)
+    row.details:SetJustifyH("LEFT")
+    constrainFontString(row.details, 26, 2, true)
+    row.savings = label(row, "")
+    row.savings:SetPoint("TOPRIGHT", -92, -3)
+    row.savings:SetWidth(120)
+    row.savings:SetJustifyH("RIGHT")
+    constrainFontString(row.savings, 14, 1, false)
+    row.sources = button(row, "Sources", 78, 22)
+    row.sources:SetPoint("RIGHT", -2, 0)
+    row.sources:SetScript("OnClick", function()
+      if not row.entry then return end
+      local ok, message = SPP.Map:OpenRecipeSources(row.entry.recipe, self.expansion, self.phase)
+      if message then print("|cff75c94fCole:|r " .. message) end
+    end)
+    row:EnableMouse(true)
+    row:SetScript("OnEnter", function()
+      if not row.entry then return end
+      local recipe = row.entry.recipe
+      GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+      GameTooltip:SetText(recipe[SPP.R.NAME], 1, 1, 1)
+      if row.entry.seasonal then
+        GameTooltip:AddLine("Excluded from the route until this character has learned it.", 1, 0.45, 0.25, true)
+      elseif row.entry.acquisitionKind == "vendor-optional" then
+        GameTooltip:AddLine("The no-travel route is active. Enable vendor trips only if this saving is worth the journey.", 1, 0.82, 0.2, true)
+      elseif row.entry.acquisitionKind == "vendor-unconfirmed" then
+        GameTooltip:AddLine("The route does not assume this recipe until vendor stock or an auction listing is confirmed.", 1, 0.82, 0.2, true)
+      end
+      for _, source in ipairs(SPP.Data:GetAvailableSources(recipe, self.expansion, self.phase)) do
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddLine(SPP.Data:GetSourceText(source, true), 0.85, 0.9, 1, true)
+      end
+      GameTooltip:Show()
+    end)
+    row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    table.insert(frame.rows, row)
+  end
+  frame.search = button(frame, "Search recipe items at AH", 190, 24)
+  frame.search:SetPoint("BOTTOMRIGHT", -18, 16)
+  frame.search:SetScript("OnClick", function()
+    local ok, message = SPP.Auctionator:SearchRecipeOpportunities(self.plan)
+    self.shoppingStatus:SetTextColor(ok and 0.45 or 1, ok and 1 or 0.35, ok and 0.45 or 0.25)
+    self.shoppingStatus:SetText(message or "")
+  end)
+  frame.travel = button(frame, "Allow vendor trips", 150, 24)
+  frame.travel:SetPoint("BOTTOM", 0, 16)
+  frame.travel:SetScript("OnClick", function()
+    local focusedRecipe = self.recipeOptionsFocused
+    local enabled = not (self.includeVendorRecipes and self.includeVendorRecipes:GetChecked())
+    self.includeVendorRecipesValue = enabled
+    ColeProfessionPlannerDB.includeVendorRecipes = enabled
+    if self.includeVendorRecipes then self.includeVendorRecipes:SetChecked(enabled) end
+    self:BuildPlan()
+    self:ShowRecipeOptions(focusedRecipe)
+  end)
+  frame.count = label(frame, "")
+  frame.count:SetPoint("BOTTOMLEFT", 18, 21)
+  frame:Hide()
+  self.recipeOptionsFrame = frame
+  if UISpecialFrames then table.insert(UISpecialFrames, "ColeProfessionPlannerRecipeOptionsFrame") end
+  return frame
+end
+
+local function routeAcquisitionDetails(entry, summary)
+  local skill = entry.fromSkill and (" before skill " .. entry.fromSkill) or ""
+  if entry.acquisitionKind == "trainer" then
+    return "Train" .. skill .. " | " .. summary
+  elseif entry.acquisitionKind == "vendor" then
+    return "Buy " .. SPP.Data:GetItemName(entry.itemId or entry.recipe[SPP.R.RECIPE_ITEM]) .. skill .. " | " .. summary
+  elseif entry.acquisitionKind == "auction" then
+    return "Buy at the Auction House" .. skill .. " | Original source: " .. summary
+  elseif entry.acquisitionKind == "owned" then
+    return "Learn the recipe from your bags" .. skill .. " | " .. summary
+  end
+  return "Required" .. skill .. " | " .. summary
+end
+
+function SPP.UI:UpdateRecipeOptionsFrame()
+  local frame = self.recipeOptionsFrame
+  if not frame then return end
+  local entries = self.recipeOptionEntries or {}
+  for index, row in ipairs(frame.rows) do
+    local entry = entries[(self.recipeOptionOffset or 0) + index]
+    row.entry = entry
+    if not entry then
+      row:Hide()
+    else
+      local recipe = entry.recipe
+      local summary = SPP.Data:GetSourceSummary(recipe, self.expansion, self.phase)
+      local details
+      if entry.required then
+        details = routeAcquisitionDetails(entry, summary)
+      elseif entry.skippedRequirement then
+        details = "Skipped manually | Turn off Skip missing reqs to restore it"
+      elseif entry.seasonal then
+        local requirement
+        for _, source in ipairs(SPP.Data:GetAvailableSources(recipe, self.expansion, self.phase)) do
+          local extra = source[SPP.S.EXTRA]
+          if type(extra) == "string" and extra ~= "" then requirement = extra break end
+        end
+        details = "Unavailable unless already learned | " .. (requirement or summary)
+      elseif entry.acquisitionKind == "vendor-optional" then
+        details = "Skipped: vendor travel disabled | " .. summary
+      elseif entry.acquisitionKind == "vendor-unconfirmed" then
+        details = (SPP.Data:IsLimitedVendorRecipe(recipe, self.expansion, self.phase) and "Limited stock not confirmed | " or "Vendor not confirmed | ") .. summary
+      else
+        details = "No confirmed auction listing | " .. summary
+      end
+      row.icon:SetTexture(recipeIcon(recipe))
+      row.name:SetText(recipe[SPP.R.NAME])
+      row.details:SetText(details)
+      row.savings:SetText(entry.required and "Required"
+        or entry.skippedRequirement and "Skipped"
+        or entry.estimatedSavings and ("Save ~" .. SPP:FormatMoney(entry.estimatedSavings))
+        or "Blocked")
+      if entry.required then
+        row.savings:SetTextColor(1, 0.82, 0.2)
+      else
+        row.savings:SetTextColor(1, 0.55, 0.25)
+      end
+      local mappableCount = #SPP.Data:GetMappableSources(recipe, self.expansion, self.phase)
+      row.sources:SetEnabled(mappableCount > 0)
+      row.sources:SetText(mappableCount > 1 and "Sources" or "Map")
+      row:Show()
+    end
+  end
+  local auctionCount = #(self.plan and self.plan.recipeOpportunities or {})
+  frame.search:SetShown(not self.recipeOptionsFocused and auctionCount > 0)
+  frame.search:SetEnabled(auctionCount > 0)
+  local tripsAllowed = self.includeVendorRecipes and self.includeVendorRecipes:GetChecked()
+  frame.travel:SetText(tripsAllowed and "Use no-travel route" or "Allow vendor trips")
+  local hasVendorAlternative = false
+  for _, entry in ipairs(entries) do
+    if entry.acquisitionKind == "vendor-optional" or entry.acquisitionKind == "vendor-unconfirmed" then
+      hasVendorAlternative = true
+      break
+    end
+  end
+  frame.travel:SetShown(tripsAllowed or hasVendorAlternative)
+  frame.count:SetText(string.format("%d recipe%s", #entries, #entries == 1 and "" or "s"))
+end
+
+function SPP.UI:ShowRecipeOptions(focusRecipe)
+  local frame = self:CreateRecipeOptionsFrame()
+  self.recipeOptionsFocused = focusRecipe
+  self.recipeOptionEntries, self.recipeOptionOffset = {}, 0
+  local seen = {}
+  local function append(entry)
+    local spellId = entry.recipe and entry.recipe[SPP.R.SPELL]
+    if spellId and not seen[spellId] and (not focusRecipe or entry.recipe == focusRecipe) then
+      seen[spellId] = true
+      table.insert(self.recipeOptionEntries, entry)
+    end
+  end
+  for _, step in ipairs(self.plan and self.plan.steps or {}) do
+    if step.acquisitionKind then
+      append({
+        recipe = step.recipe, itemId = step.recipeItem or step.acquisitionItem,
+        fromSkill = step.fromSkill, acquisitionKind = step.acquisitionKind, required = true
+      })
+    end
+  end
+  for _, opportunity in ipairs(self.plan and self.plan.recipeOpportunities or {}) do
+    append(opportunity)
+  end
+  for _, recipe in ipairs(self.plan and self.plan.seasonalExclusions or {}) do
+    append({ recipe = recipe, seasonal = true })
+  end
+  for _, recipe in ipairs(self.plan and self.plan.skippedProgressionRecipes or {}) do
+    append({ recipe = recipe, skippedRequirement = true })
+  end
+  if focusRecipe and not seen[focusRecipe[SPP.R.SPELL]] then
+    append({ recipe = focusRecipe, acquisitionKind = SPP.Data:IsVendorRecipe(focusRecipe, self.expansion, self.phase)
+      and "vendor" or "source", required = true })
+  end
+  frame.title:SetText(focusRecipe and ("How to learn: " .. focusRecipe[SPP.R.NAME]) or "Recipe acquisition")
+  frame.subtitle:SetText(focusRecipe
+    and "Required by this route. Sources lists valid faction and phase locations, nearest first."
+    or "Required route recipes first; alternatives and seasonal exclusions follow.")
+  self:UpdateRecipeOptionsFrame()
+  frame:Show()
+  return frame
 end
 
 function SPP.UI:GetPlanPriceFreshness(plan, now)
@@ -377,6 +694,10 @@ function SPP.UI:GetPricingOptions()
   return {
     maxExpansion = self.expansion, maxPhase = self.phase,
     includeRareRecipes = self.includeRareRecipes and self.includeRareRecipes:GetChecked() or true,
+    includeVendorRecipes = self.includeVendorRecipes and self.includeVendorRecipes:GetChecked()
+      or self.includeVendorRecipesValue == true,
+    skipUnavailableProgression = self.skipUnavailableProgression and self.skipUnavailableProgression:GetChecked()
+      or self.skipUnavailableProgressionValue == true,
     routeMode = self.routeMode == "fast" and "fast" or "economy",
     knownRecipes = self.knownRecipes, availableProfessions = available
   }
@@ -428,6 +749,47 @@ function SPP.UI:OpenProfession()
   return false, "The client could not open " .. (known.name or self.profession)
 end
 
+function SPP.UI:LoadSavedPlan(profession)
+  local savedPlans = ColeProfessionPlannerDB and ColeProfessionPlannerDB.savedPlans
+  local plan = SPP.Planner:RestorePlan(savedPlans and savedPlans[profession])
+  if not plan then return false end
+  self.profession = plan.profession
+  self.expansion = plan.maxExpansion or self.expansion
+  self.phase = plan.maxPhase or self.phase
+  self.routeMode = plan.routeMode
+  self.includeVendorRecipesValue = plan.includeVendorRecipes == true
+  self.skipUnavailableProgressionValue = plan.skipUnavailableProgression == true
+  self.plan, self.planMessage = plan, nil
+  self.planOffset, self.shoppingOffset = 0, 0
+  if self.expansionMenu then
+    UIDropDownMenu_SetSelectedValue(self.expansionMenu, self.expansion)
+    UIDropDownMenu_SetText(self.expansionMenu, EXPANSIONS[self.expansion])
+  end
+  if self.phaseMenu then
+    UIDropDownMenu_SetSelectedValue(self.phaseMenu, self.phase)
+    UIDropDownMenu_SetText(self.phaseMenu, phaseLabel(self.expansion, self.phase))
+  end
+  if self.routeModeMenu then
+    UIDropDownMenu_SetSelectedValue(self.routeModeMenu, self.routeMode)
+    UIDropDownMenu_SetText(self.routeModeMenu, self.routeMode == "fast" and ROUTE_MODES[1].label or ROUTE_MODES[2].label)
+  end
+  if self.includeVendorRecipes then self.includeVendorRecipes:SetChecked(self.includeVendorRecipesValue) end
+  if self.skipUnavailableProgression then
+    self.skipUnavailableProgression:SetChecked(self.skipUnavailableProgressionValue)
+  end
+  if self.fromBox then self.fromBox:SetText(plan.fromSkill) end
+  if self.toBox then self.toBox:SetText(plan.toSkill) end
+  return true
+end
+
+function SPP.UI:SavePlan(plan)
+  local saved = SPP.Planner:SerializePlan(plan)
+  if not saved then return end
+  ColeProfessionPlannerDB.savedPlans = ColeProfessionPlannerDB.savedPlans or {}
+  ColeProfessionPlannerDB.savedPlans[plan.profession] = saved
+  ColeProfessionPlannerDB.lastPlanProfession = plan.profession
+end
+
 function SPP.UI:Create()
   if self.frame then return end
   local client = SPP.Client:GetInfo()
@@ -437,6 +799,9 @@ function SPP.UI:Create()
   self.phase = client.phase
   self.skill = knownProfessions[self.profession] and knownProfessions[self.profession].rank or 1
   self.routeMode = ColeProfessionPlannerDB.routeMode == "fast" and "fast" or "economy"
+  self.includeVendorRecipesValue = ColeProfessionPlannerDB.includeVendorRecipes == true
+  self.skipUnavailableProgressionValue = ColeProfessionPlannerDB.skipUnavailableProgression == true
+  self:LoadSavedPlan(ColeProfessionPlannerDB.lastPlanProfession)
 
   local frame = CreateFrame("Frame", "ColeProfessionPlannerFrame", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
   self.frame = frame
@@ -593,15 +958,21 @@ function SPP.UI:Create()
     return SPP.Client:GetProfessionChoices()
   end
   self.professionMenu = dropdown(self.settingsPanel, 145, professionValues, function(value)
+    self.plan = nil
     self.profession = value
     self.skill = 1
     self:SyncProfessionSkill(true)
-    self.offset, self.planOffset, self.shoppingOffset, self.plan = 0, 0, 0, nil
+    self:LoadSavedPlan(value)
+    self.offset, self.planOffset, self.shoppingOffset = 0, 0, 0
     self:Refresh()
   end)
   self.professionMenu:SetPoint("TOPLEFT", 38, -31)
   UIDropDownMenu_SetSelectedValue(self.professionMenu, self.profession)
-  UIDropDownMenu_SetText(self.professionMenu, professionChoices[1] and professionChoices[1].label or "Alchemy")
+  local selectedProfessionLabel = "Alchemy"
+  for _, choice in ipairs(professionChoices) do
+    if choice.value == self.profession then selectedProfessionLabel = choice.label break end
+  end
+  UIDropDownMenu_SetText(self.professionMenu, selectedProfessionLabel)
   self.openProfessionButton = CreateFrame("Button", nil, self.settingsPanel, "UIPanelButtonTemplate")
   self.openProfessionButton:SetSize(26, 26)
   self.openProfessionButton:SetPoint("TOPLEFT", 8, -32)
@@ -653,12 +1024,12 @@ function SPP.UI:Create()
   fromLabel:SetPoint("TOPLEFT", 10, -151)
   self.fromBox = editBox(self.settingsPanel, 50, true)
   self.fromBox:SetPoint("LEFT", fromLabel, "RIGHT", 7, 0)
-  self.fromBox:SetText(self.skill)
+  self.fromBox:SetText(self.plan and self.plan.fromSkill or self.skill)
   local toLabel = label(self.settingsPanel, "To")
   toLabel:SetPoint("LEFT", self.fromBox, "RIGHT", 14, 0)
   self.toBox = editBox(self.settingsPanel, 50, true)
   self.toBox:SetPoint("LEFT", toLabel, "RIGHT", 7, 0)
-  self.toBox:SetText(client.maxSkill)
+  self.toBox:SetText(self.plan and self.plan.toSkill or client.maxSkill)
 
   local modeLabel = label(self.settingsPanel, "Calculation mode")
   modeLabel:SetPoint("TOPLEFT", 10, -184)
@@ -731,21 +1102,65 @@ function SPP.UI:Create()
   end)
   self.includeRareRecipes:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
+  self.includeVendorRecipes = CreateFrame("CheckButton", nil, self.settingsPanel, "UICheckButtonTemplate")
+  self.includeVendorRecipes:SetSize(24, 24)
+  self.includeVendorRecipes:SetPoint("TOPLEFT", 7, -327)
+  self.includeVendorRecipes:SetChecked(self.includeVendorRecipesValue)
+  self.includeVendorRecipesLabel = label(self.settingsPanel, "Vendor trips")
+  self.includeVendorRecipesLabel:SetPoint("LEFT", self.includeVendorRecipes, "RIGHT", 2, 0)
+  self.includeVendorRecipes:SetScript("OnClick", function(control)
+    local enabled = control:GetChecked() == true
+    self.includeVendorRecipesValue = enabled
+    ColeProfessionPlannerDB.includeVendorRecipes = enabled
+    if self.plan and not self.plan.priceDiscovery then self:BuildPlan() end
+  end)
+  self.includeVendorRecipes:SetScript("OnEnter", function(control)
+    GameTooltip:SetOwner(control, "ANCHOR_RIGHT")
+    GameTooltip:SetText("Allow vendor trips")
+    GameTooltip:AddLine("Off builds a fallback route without traveling for unknown vendor recipes.", 1, 1, 1, true)
+    GameTooltip:AddLine("Recipe options shows the possible savings and mapped source. Learned recipes and confirmed auction copies remain usable.", 0.75, 0.9, 0.75, true)
+    GameTooltip:Show()
+  end)
+  self.includeVendorRecipes:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+  self.skipUnavailableProgression = CreateFrame("CheckButton", nil, self.settingsPanel, "UICheckButtonTemplate")
+  self.skipUnavailableProgression:SetSize(24, 24)
+  self.skipUnavailableProgression:SetPoint("TOPLEFT", 7, -356)
+  self.skipUnavailableProgression:SetChecked(self.skipUnavailableProgressionValue)
+  self.skipUnavailableProgressionLabel = label(self.settingsPanel, "Skip missing reqs")
+  self.skipUnavailableProgressionLabel:SetPoint("LEFT", self.skipUnavailableProgression, "RIGHT", 2, 0)
+  self.skipUnavailableProgressionLabel:SetWidth(150)
+  self.skipUnavailableProgressionLabel:SetJustifyH("LEFT")
+  self.skipUnavailableProgression:SetScript("OnClick", function(control)
+    local enabled = control:GetChecked() == true
+    self.skipUnavailableProgressionValue = enabled
+    ColeProfessionPlannerDB.skipUnavailableProgression = enabled
+    if self.plan then self:BuildPlan() end
+  end)
+  self.skipUnavailableProgression:SetScript("OnEnter", function(control)
+    GameTooltip:SetOwner(control, "ANCHOR_RIGHT")
+    GameTooltip:SetText("Skip missing required recipes")
+    GameTooltip:AddLine("Builds a fallback route without unlearned progression formulas that are not in the selected inventory.", 1, 1, 1, true)
+    GameTooltip:AddLine("Skipped requirements remain listed in Recipe options so you can restore them later.", 1, 0.82, 0.2, true)
+    GameTooltip:Show()
+  end)
+  self.skipUnavailableProgression:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
   self.buildButton = button(self.settingsPanel, "Calculate route", 188, 28)
-  self.buildButton:SetPoint("TOPLEFT", 10, -335)
+  self.buildButton:SetPoint("TOPLEFT", 10, -393)
   self.buildButton:SetScript("OnClick", function() self:BuildPlan() end)
 
   self.totalLabel = label(self.settingsPanel, "")
-  self.totalLabel:SetPoint("TOPLEFT", 10, -377)
+  self.totalLabel:SetPoint("TOPLEFT", 10, -435)
   self.totalLabel:SetWidth(190)
   self.totalLabel:SetJustifyH("LEFT")
   self.totalLabel:SetFontObject("GameFontNormal")
   self.selectionLabel = label(self.settingsPanel, "", "GameFontDisableSmall")
-  self.selectionLabel:SetPoint("TOPLEFT", 10, -400)
+  self.selectionLabel:SetPoint("TOPLEFT", 10, -458)
   self.selectionLabel:SetWidth(190)
   self.selectionLabel:SetJustifyH("LEFT")
   self.miningNote = label(self.settingsPanel, "")
-  self.miningNote:SetPoint("TOPLEFT", 10, -435)
+  self.miningNote:SetPoint("TOPLEFT", 10, -493)
   self.miningNote:SetWidth(190)
   self.miningNote:SetJustifyH("LEFT")
   self:UpdateMiningNote()
@@ -766,8 +1181,8 @@ function SPP.UI:Create()
   for i = 1, VISIBLE_PLAN_ROWS do
     self.planRows[i] = self:CreatePlanRow(self.routePanel, i)
     self.planRows[i]:ClearAllPoints()
-    self.planRows[i]:SetPoint("TOPLEFT", 4, -48 - ((i - 1) * 46))
-    self.planRows[i]:SetPoint("TOPRIGHT", -4, -48 - ((i - 1) * 46))
+    self.planRows[i]:SetPoint("TOPLEFT", 4, -48 - ((i - 1) * 58))
+    self.planRows[i]:SetPoint("TOPRIGHT", -4, -48 - ((i - 1) * 58))
   end
   self.planError = label(self.routePanel, "")
   self.planError:SetPoint("BOTTOMLEFT", 6, 2)
@@ -803,13 +1218,18 @@ function SPP.UI:Create()
     self.shoppingStatus:SetTextColor(ok and 0.45 or 1, ok and 1 or 0.35, ok and 0.45 or 0.25)
     self.shoppingStatus:SetText(message or "")
   end)
-  self.recipeSearchButton = button(self.shoppingPanel, "Recipe prices", 124, 24)
+  self.recipeSearchButton = button(self.shoppingPanel, "Recipe options", 124, 24)
   self.recipeSearchButton:SetPoint("BOTTOMRIGHT", -7, 35)
   self.recipeSearchButton:SetScript("OnClick", function()
-    local ok, message = SPP.Auctionator:SearchRecipeOpportunities(self.plan)
-    self.shoppingStatus:SetTextColor(ok and 0.45 or 1, ok and 1 or 0.35, ok and 0.45 or 0.25)
-    self.shoppingStatus:SetText(message or "")
+    self:ShowRecipeOptions()
   end)
+  self.recipeSearchButton:SetScript("OnEnter", function(control)
+    GameTooltip:SetOwner(control, "ANCHOR_TOP")
+    GameTooltip:SetText("Recipe acquisition options")
+    GameTooltip:AddLine("Shows vendor stock checks, mapped sources, auction alternatives and seasonal recipes excluded from the route.", 1, 1, 1, true)
+    GameTooltip:Show()
+  end)
+  self.recipeSearchButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
   self.searchButton = button(self.shoppingPanel, "Search at Auction House", 250, 26)
   self.searchButton:SetPoint("BOTTOM", 0, 6)
   self.searchButton:SetScript("OnClick", function()
@@ -877,6 +1297,10 @@ function SPP.UI:BuildPlan()
   end
   options.inventory = inventory
   local plan, message, priceScan = SPP.Planner:Build(self.profession, fromSkill, toSkill, options)
+  if plan then
+    plan.restored = false
+    self:SavePlan(plan)
+  end
   self.plan, self.planMessage = plan or priceScan, message
   if self.useBags:GetChecked() then
     self.useBagsLabel:SetText("Bags/bank " .. SPP.Inventory:GetRelevantCount(currentInventory))
@@ -910,9 +1334,14 @@ function SPP.UI:BuildFullRefreshPlan()
     and existingPlan.toSkill == toSkill
     and existingPlan.maxExpansion == self.expansion
     and existingPlan.maxPhase == self.phase
+    and existingPlan.routeMode == options.routeMode
+    and existingPlan.includeVendorRecipes == (options.includeVendorRecipes == true)
+    and (existingPlan.skipUnavailableProgression == true) == (options.skipUnavailableProgression == true)
   return {
     profession = self.profession, fromSkill = fromSkill, toSkill = toSkill,
     maxExpansion = self.expansion, maxPhase = self.phase,
+    routeMode = options.routeMode, includeVendorRecipes = options.includeVendorRecipes == true,
+    skipUnavailableProgression = options.skipUnavailableProgression == true,
     shopping = planMatchesRange and existingPlan.shopping or {},
     refreshShopping = refreshShopping,
     recipeOpportunities = planMatchesRange and existingPlan.recipeOpportunities or {},
@@ -927,18 +1356,29 @@ function SPP.UI:UpdatePlanRows()
     if not step then row:Hide() else
       row.step = step
       row:Show()
-      row.skill:SetText(step.fromSkill .. " - " .. step.toSkill)
+      row.skill:SetText(step.mandatory and (step.skillGain or 0) == 0
+        and (step.fromSkill .. " craft")
+        or (step.fromSkill .. " - " .. step.toSkill))
       row.name:SetText(step.recipe[SPP.R.NAME])
       row.icon:SetTexture(recipeIcon(step.recipe))
       row.materials:SetText(formatStepMaterials(step))
       row.crafts:SetText(string.format("%.1f", step.expectedCrafts))
       row.time:SetText(formatDuration(step.craftSeconds, step.craftTimeEstimated))
-      row.cost:SetText(SPP:FormatMoney(step.cost)
-        .. (step.usedInventory and "  |cff75c94fbags|r" or "")
-        .. (step.acquisitionItem and "  |cffffd34erecipe|r" or "")
-        .. (step.mandatory and "  |cffffd34erequired|r" or ""))
+      row.cost:SetText(SPP:FormatMoney(step.cost))
+      local flags = {}
+      if step.usedInventory then table.insert(flags, "|cff75c94fbags|r") end
+      if step.acquisitionItem then table.insert(flags, "|cffffd34erecipe|r") end
+      if step.recipe[SPP.R.REQUIRED] then
+        table.insert(flags, "|cffffd34etool|r")
+      elseif step.mandatory then
+        table.insert(flags, "|cffffd34ereq.|r")
+      end
+      row.flags:SetText(table.concat(flags, "  "))
     end
-    if not step then row.step = nil end
+    if not step then
+      row.step = nil
+      row.flags:SetText("")
+    end
   end
   local bagSuffix = self.plan and self.plan.usedInventory and " + bags" or ""
   if self.plan and self.plan.priceDiscovery then
@@ -965,13 +1405,23 @@ function SPP.UI:UpdatePlanRows()
       self.plan.missingPriceCount
     ))
   else
+    local skippedRequirements = self.plan and #(self.plan.skippedProgressionRecipes or {}) or 0
     local skipped = self.plan and self.plan.skippedMissingPriceCount or 0
-    if skipped > 0 then
+    if skippedRequirements > 0 then
+      self.planError:SetTextColor(1, 0.82, 0.2)
+      self.planError:SetText(string.format(
+        "Fallback route: %d required recipe%s skipped. Turn off Skip missing reqs to restore.",
+        skippedRequirements, skippedRequirements == 1 and " was" or "s were"
+      ))
+    elseif skipped > 0 then
       self.planError:SetTextColor(1, 0.82, 0.2)
       self.planError:SetText(string.format(
         "Route calculated; %d optional material price%s missing. Refresh range prices for a complete comparison.",
         skipped, skipped == 1 and " is" or "s are"
       ))
+    elseif self.plan and self.plan.restored then
+      self.planError:SetTextColor(0.45, 1, 0.45)
+      self.planError:SetText("Restored the last saved route. Recalculate only when you want to replace it.")
     else
       self.planError:SetTextColor(1, 0.35, 0.25)
       self.planError:SetText(self.plan and "" or (self.planMessage or ""))
@@ -1005,6 +1455,19 @@ function SPP.UI:OnAuctionPricesUpdated(count)
   self.shoppingStatus:SetText(message)
 end
 
+function SPP.UI:OnVendorRecipesUpdated(count)
+  if not self.frame or not self.frame:IsShown() or self.mode ~= "planner" then return end
+  self:BuildPlan()
+  local message = string.format("Checked %d vendor recipe%s and recalculated the route.", count or 0, count == 1 and "" or "s")
+  self.planError:SetTextColor(0.45, 1, 0.45)
+  self.planError:SetText(message)
+  self.shoppingStatus:SetTextColor(0.45, 1, 0.45)
+  self.shoppingStatus:SetText(message)
+  if self.recipeOptionsFrame and self.recipeOptionsFrame:IsShown() then
+    self:ShowRecipeOptions(self.recipeOptionsFocused)
+  end
+end
+
 function SPP.UI:UpdateShoppingRows()
   self.shoppingRowsData = SPP.Auctionator:GetShoppingRows(self.plan)
   local auctionRows = SPP.Auctionator:GetShoppingRows(self.plan, true)
@@ -1013,11 +1476,18 @@ function SPP.UI:UpdateShoppingRows()
   for index, row in ipairs(self.shoppingRows or {}) do
     local material = self.shoppingRowsData[self.shoppingOffset + index]
     if not material then
+      row.material = nil
       row:Hide()
     else
-      local unitPrice = SPP.Price:GetUnitPrice(material.itemId)
+      row.material = material
+      local unitPrice = material.vendor and material.vendorPrice or SPP.Price:GetUnitPrice(material.itemId)
       row.icon:SetTexture(itemTexture(material.itemId))
       row.name:SetText(material.name)
+      if material.recipe then
+        row.name:SetTextColor(1, 0.82, 0.2)
+      else
+        row.name:SetTextColor(1, 1, 1)
+      end
       row.quantity:SetText("x" .. material.quantity)
       row.cost:SetText((unitPrice and SPP:FormatMoney(unitPrice * material.quantity) or "Price needed")
         .. (material.vendor and "  |cff75c94fVendor|r" or ""))
@@ -1025,7 +1495,7 @@ function SPP.UI:UpdateShoppingRows()
     end
   end
   for _, material in ipairs(self.shoppingRowsData) do
-    local unitPrice = SPP.Price:GetUnitPrice(material.itemId)
+    local unitPrice = material.vendor and material.vendorPrice or SPP.Price:GetUnitPrice(material.itemId)
     if unitPrice then estimatedTotal = estimatedTotal + unitPrice * material.quantity end
     if material.vendor then vendorCount = vendorCount + 1 end
   end
@@ -1043,13 +1513,45 @@ function SPP.UI:UpdateShoppingRows()
       #self.shoppingRowsData, vendorCount > 0 and (" (" .. vendorCount .. " vendor)") or "",
       SPP:FormatMoney(estimatedTotal)
     ))
-    local opportunityCount = #(self.plan.recipeOpportunities or {})
+    local opportunityCount, vendorTripCount, routeRecipeCount = 0, 0, 0
+    local routeRecipes = {}
+    for _, step in ipairs(self.plan.steps or {}) do
+      local spellId = step.recipe and step.recipe[SPP.R.SPELL]
+      if step.acquisitionKind and spellId and not routeRecipes[spellId] then
+        routeRecipes[spellId] = true
+        routeRecipeCount = routeRecipeCount + 1
+      end
+    end
+    for _, opportunity in ipairs(self.plan.recipeOpportunities or {}) do
+      if opportunity.acquisitionKind == "vendor-optional" then
+        vendorTripCount = vendorTripCount + 1
+      else
+        opportunityCount = opportunityCount + 1
+      end
+    end
     local notes = {}
+    local skippedRequirementCount = #(self.plan.skippedProgressionRecipes or {})
+    if skippedRequirementCount > 0 then
+      table.insert(notes, string.format(
+        "Required recipes skipped: %d. Turn off Skip missing reqs when reachable.", skippedRequirementCount
+      ))
+    end
     if vendorCount > 0 then
       table.insert(notes, string.format("Vendor supplies: %d (excluded from Auctionator).", vendorCount))
     end
+    if routeRecipeCount > 0 then
+      table.insert(notes, string.format("Route recipes: %d; click a highlighted formula or Recipe sources.", routeRecipeCount))
+    end
+    if vendorTripCount > 0 then
+      table.insert(notes, string.format("No-travel route active; %d vendor alternative%s available.",
+        vendorTripCount, vendorTripCount == 1 and "" or "s"))
+    end
     if opportunityCount > 0 then
-      table.insert(notes, string.format("Unknown cheaper recipes: %d.", opportunityCount))
+      table.insert(notes, string.format("Unconfirmed recipe options: %d.", opportunityCount))
+    end
+    local seasonalCount = #(self.plan.seasonalExclusions or {})
+    if seasonalCount > 0 then
+      table.insert(notes, string.format("Seasonal recipes excluded: %d.", seasonalCount))
     end
     self.shoppingStatus:SetText(table.concat(notes, "  "))
   end
@@ -1057,9 +1559,19 @@ function SPP.UI:UpdateShoppingRows()
   self.searchButton:SetText(self.plan and self.plan.priceDiscovery and "Scan prices at Auction House" or "Search at Auction House")
   self.listButton:SetEnabled(self.plan ~= nil and #auctionRows > 0)
   self.searchButton:SetEnabled(self.plan ~= nil and #auctionRows > 0)
-  local opportunityCount = self.plan and #(self.plan.recipeOpportunities or {}) or 0
+  local requiredRecipeCount, requiredRecipes = 0, {}
+  for _, step in ipairs(self.plan and self.plan.steps or {}) do
+    local spellId = step.recipe and step.recipe[SPP.R.SPELL]
+    if step.acquisitionKind and spellId and not requiredRecipes[spellId] then
+      requiredRecipes[spellId] = true
+      requiredRecipeCount = requiredRecipeCount + 1
+    end
+  end
+  local opportunityCount = self.plan and (#(self.plan.recipeOpportunities or {})
+    + #(self.plan.seasonalExclusions or {}) + #(self.plan.skippedProgressionRecipes or {})) or 0
   self.recipeSearchButton:SetShown(not (self.plan and self.plan.priceDiscovery))
-  self.recipeSearchButton:SetEnabled(opportunityCount > 0)
+  self.recipeSearchButton:SetText(requiredRecipeCount > 0 and ("Sources (" .. requiredRecipeCount .. ")") or "Recipe options")
+  self.recipeSearchButton:SetEnabled(requiredRecipeCount + opportunityCount > 0)
   self:UpdatePriceFreshness()
 end
 
@@ -1090,7 +1602,7 @@ function SPP.UI:Toggle()
   if self.frame:IsShown() then
     self.frame:Hide()
   else
-    self:SyncProfessionSkill(true)
+    self:SyncProfessionSkill(self.plan == nil)
     self.frame:Show()
     self:Refresh()
   end

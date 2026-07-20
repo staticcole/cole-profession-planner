@@ -1,6 +1,103 @@
 COLE PROFESSION PLANNER CHANGELOG
 =================================
 
+0.9.24-tbc
+----------
+
+- Made left-click on + Cole immediately add the currently selected profession recipe.
+- Kept right-click on + Cole as the shortcut to the full list manager.
+- Verified that materials from multiple recipes are aggregated into one multi-search with their quantities.
+- Added recipe and auction-material counts to the Auctionator search confirmation.
+
+0.9.23-tbc
+----------
+
+- Replaced the two profession-overlay actions with one compact Cole list button.
+- Anchored the list button to the stable planner control in the profession title bar.
+- Moved Add selected recipe into the list manager to avoid covering recipe profit and reagents.
+
+0.9.22-tbc
+----------
+
+- Added a movable Cole Craft List manager for recipes selected in profession windows.
+- Added per-recipe craft counts, material previews, increment, decrement and remove controls.
+- Added Add selected recipe, Clear all and Search in Auctionator actions to the manager.
+- Preserved material-only lists created by 0.9.21 as a removable imported entry.
+
+0.9.21-tbc
+----------
+
+- Added Add to Cole list buttons to TradeSkillFrame and CraftFrame recipes.
+- Added a persistent, aggregated Cole Craft List with craft-count and bag/bank handling.
+- Added a one-click Cole list button at the Auction House to create and search the Auctionator list.
+- Kept fixed-price vendor supplies out of Auctionator and added list status, tooltip and clear controls.
+
+0.9.20-tbc
+----------
+
+- Added a Skip missing reqs option for temporarily unreachable progression formulas.
+- Removed skipped formulas from route price scans and kept them visible in Recipe options.
+- Added clear fallback-route warnings and preserved the setting with saved routes.
+
+0.9.19-tbc
+----------
+
+- Added Arclight Spanner and Gyromatic Micro-Adjustor as independent required Engineering crafts.
+- Planned each missing Engineering tool exactly once before the leveling recipes that need it.
+- Reused tools found in the selected bags or bank instead of crafting them again.
+
+0.9.18-tbc
+----------
+
+- Made recipe items in the shopping list clickable and linked them back to their profession recipe.
+- Added every required route recipe to Recipe sources, including trainer and vendor acquisitions.
+- Changed route recipe clicks to open focused How to learn details before opening a map.
+- Rebuilt Recipe acquisition as a movable, clamped, fully opaque top-level dialog.
+- Raised the trainer/vendor source picker above acquisition details and retained distance sorting.
+
+0.9.17-tbc
+----------
+
+- Stopped gray, green and yellow mandatory Runed Rod crafts from being counted as guaranteed skill points.
+- Kept each missing rod as a required one-craft prerequisite without shifting the real leveling range.
+- Continued to count an orange mandatory rod as one guaranteed skill point.
+- Added explicit same-skill craft labels and preserved skill-gain state in saved routes.
+
+0.9.16-tbc
+----------
+
+- Rebuilt leveling rows with fixed text bounds so recipe details cannot overlap adjacent rows.
+- Limited recipe names to one line and material summaries to two lines; full details remain in the tooltip.
+- Split cost and route flags into separate single-line fields.
+- Increased row spacing and reduced visible route rows to seven for consistent vertical rhythm.
+
+0.9.15-tbc
+----------
+
+- Added a no-travel route policy that skips unknown vendor recipes by default.
+- Added a Vendor trips option for players who want cheaper routes that require travel.
+- Listed skipped vendor recipes as alternatives with estimated savings and mapped sources.
+- Added a one-click route switch between no-travel and vendor-trip plans in Recipe options.
+- Kept learned recipes, recipes already in inventory and confirmed auction copies usable without vendor travel.
+
+0.9.14-tbc
+----------
+
+- Stopped unknown seasonal recipes from entering leveling routes until the character has learned them.
+- Required fresh in-game stock confirmation before using limited vendor recipes such as Schematic: Red Firework.
+- Added automatic limited-recipe stock scans when opening or updating the relevant merchant window.
+- Added a Recipe options window for mapped vendors, auction alternatives, savings and blocked seasonal acquisitions.
+- Added explicit Buy recipe, Learn recipe and Train recipe requirements to route rows and tooltips.
+- Corrected Large Blue Rocket to its Lunar Festival, level 35, 5 Coins of Ancestry, Bind-on-Pickup acquisition.
+
+0.9.13-tbc
+----------
+
+- Saved the latest successful route separately for each profession and restored it after reloads or profession switches.
+- Preserved the purchased-material shopping list, route steps, costs and craft-time estimates in a compact SavedVariables snapshot.
+- Stopped planning blocks at newly available recipe thresholds before reevaluating the best recipe.
+- Kept five-point blocks as the maximum block size instead of crossing a better recipe unlock by one skill point.
+
 0.9.12-tbc
 ----------
 

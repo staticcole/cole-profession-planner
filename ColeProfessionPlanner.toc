@@ -2,7 +2,7 @@
 ## Title: Cole Profession Planner
 ## Notes: Profession recipe browser and bag/auction-aware leveling planner for TBC Anniversary.
 ## Author: Sol
-## Version: 0.9.12-tbc
+## Version: 0.9.24-tbc
 ## X-Flavor: TBC Anniversary
 ## IconTexture: Interface\AddOns\ColeProfessionPlanner\Media\ColeIcon.tga
 ## SavedVariables: ColeProfessionPlannerDB, SolProfessionPlannerDB
@@ -28,6 +28,7 @@ PriceProviders.lua
 Inventory.lua
 Planner.lua
 Auctionator.lua
+CraftList.lua
 Map.lua
 UI.lua
 Minimap.lua

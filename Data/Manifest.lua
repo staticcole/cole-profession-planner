@@ -1,1 +1,1 @@
-SPP_DATA_MANIFEST = "{\"recipeCount\":2007,\"conversionCount\":13,\"sourceCount\":1332,\"professions\":[\"alchemy\",\"blacksmithing\",\"cooking\",\"enchanting\",\"engineering\",\"first-aid\",\"jewelcrafting\",\"leatherworking\",\"mining\",\"tailoring\"]}"
+SPP_DATA_MANIFEST = "{\"recipeCount\":2007,\"conversionCount\":13,\"sourceCount\":1335,\"professions\":[\"alchemy\",\"blacksmithing\",\"cooking\",\"enchanting\",\"engineering\",\"first-aid\",\"jewelcrafting\",\"leatherworking\",\"mining\",\"tailoring\"]}"
